@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-ROS2 systemd 服务管理脚本（YAML 驱动版）
+ROS2 systemd service manager (YAML-driven).
 
-目标：
-1) 读取 ros2_services.yaml，决定“工作空间目录 + 服务列表 + 运行参数”。
-2) 支持三种动作：
-   - install-only           仅安装 unit 文件
-   - install-start-enable   安装 + 启动 + 开机自启
-   - uninstall              卸载（停止、取消自启、删除 unit 文件）
-3) 无 mode 参数时，自动使用 YAML 中 actions.default_action。
+Goals:
+1) Read ros2_services.yaml to determine workspace path, service list, and runtime options.
+2) Support three actions:
+    - install-only           Install unit files only
+    - install-start-enable   Install + start + enable on boot
+    - uninstall              Uninstall (stop, disable, remove unit files)
+3) If no action is provided, use actions.default_action from YAML.
 
-设计说明：
-- 你当前是在 root 下执行 ros2 launch，因此默认 runtime.user/group/home 也按 root 配置。
-- 每个服务都会生成独立的 systemd unit，便于单独排障。
-- systemd 的 daemon-reload 在安装/卸载后都会执行，确保配置生效。
+Design notes:
+- The current setup runs ros2 launch as root, so runtime.user/group/home defaults to root.
+- Each service gets an independent systemd unit for easier troubleshooting.
+- systemd daemon-reload runs after install/uninstall to apply changes.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from typing import Any, Dict, List
 try:
     import yaml
 except ImportError:
-    print("[ERROR] 缺少依赖 PyYAML。请先安装：pip install pyyaml", file=sys.stderr)
+    print("[ERROR] Missing dependency PyYAML. Install it first: pip install pyyaml", file=sys.stderr)
     sys.exit(1)
 
 
@@ -36,38 +36,38 @@ SUPPORTED_ACTIONS = {"install-only", "install-start-enable", "uninstall"}
 
 
 def log(message: str) -> None:
-    """统一的信息输出，便于终端识别脚本执行进度。"""
+    """Unified info output for readable execution progress."""
     print(f"[INFO] {message}")
 
 
 def err(message: str) -> None:
-    """统一的错误输出。"""
+    """Unified error output."""
     print(f"[ERROR] {message}", file=sys.stderr)
 
 
 def run_cmd(cmd: List[str]) -> None:
-    """执行系统命令；失败时直接抛出异常，由上层统一处理。"""
+    """Run a system command and raise on failure."""
     subprocess.run(cmd, check=True)
 
 
 def require_root() -> None:
-    """写 /etc/systemd/system 与 systemctl 操作需要 root 权限。"""
+    """Root privileges are required for /etc/systemd/system and systemctl operations."""
     if os.geteuid() != 0:
-        err("请使用 sudo/root 运行此脚本。")
+        err("Please run this script with sudo/root privileges.")
         sys.exit(1)
 
 
 def load_yaml_config(config_path: Path) -> Dict[str, Any]:
-    """加载并解析 YAML 配置。"""
+    """Load and parse YAML configuration."""
     if not config_path.exists():
-        err(f"配置文件不存在: {config_path}")
+        err(f"Configuration file does not exist: {config_path}")
         sys.exit(1)
 
     with config_path.open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
 
     if not isinstance(data, dict):
-        err("配置文件格式错误：顶层应为字典（mapping）。")
+        err("Invalid configuration format: top-level must be a mapping.")
         sys.exit(1)
 
     return data
@@ -75,31 +75,32 @@ def load_yaml_config(config_path: Path) -> Dict[str, Any]:
 
 def validate_config(config: Dict[str, Any]) -> None:
     """
-    对关键字段做最小必要校验。
-    目的：避免运行到一半才因字段缺失失败，提升可维护性。
+    Validate required top-level fields.
+    Purpose: fail fast on missing keys.
     """
     for key in ["actions", "systemd", "runtime", "workspaces"]:
         if key not in config:
-            err(f"配置缺少字段: {key}")
+            err(f"Missing required config field: {key}")
             sys.exit(1)
 
     workspaces = config.get("workspaces")
     if not isinstance(workspaces, dict) or not workspaces:
-        err("workspaces 不能为空，且必须是对象。")
+        err("workspaces must be a non-empty mapping.")
         sys.exit(1)
 
 
 def resolve_action(cli_action: str | None, config: Dict[str, Any]) -> str:
     """
-    确定要执行的动作：
-    - CLI 指定优先
-    - 否则使用 YAML 的 default_action
+    Resolve action selection:
+    - CLI action has priority
+    - otherwise use YAML default_action
     """
-    default_action = config.get("actions", {}).get("default_action", "install-start-enable")
+    default_action = config.get("actions", {}).get(
+        "default_action", "install-start-enable")
     action = cli_action or default_action
 
     if action not in SUPPORTED_ACTIONS:
-        err(f"不支持的动作: {action}，允许: {sorted(SUPPORTED_ACTIONS)}")
+        err(f"Unsupported action: {action}. Allowed: {sorted(SUPPORTED_ACTIONS)}")
         sys.exit(1)
 
     return action
@@ -107,15 +108,15 @@ def resolve_action(cli_action: str | None, config: Dict[str, Any]) -> str:
 
 def resolve_workspace_key(cli_workspace_key: str | None, config: Dict[str, Any]) -> str:
     """
-    选择工作空间：
-    - 指定 --workspace-key 时使用指定项
-    - 未指定时使用 workspaces 中第一项
+    Resolve workspace key:
+    - use --workspace-key if provided
+    - otherwise use the first workspace entry
     """
     workspaces: Dict[str, Any] = config["workspaces"]
 
     if cli_workspace_key:
         if cli_workspace_key not in workspaces:
-            err(f"未找到 workspace_key: {cli_workspace_key}")
+            err(f"workspace_key not found: {cli_workspace_key}")
             sys.exit(1)
         return cli_workspace_key
 
@@ -133,10 +134,10 @@ def build_unit_content(
     wanted_by: str,
 ) -> str:
     """
-    生成 systemd unit 文件内容。
-    - ExecStart 使用 bash -lc 以确保 source/setup 与 ROS 环境生效。
-    - 使用 exec 启动 ros2 launch，避免多一层 shell 进程驻留。
-    - depends_on 会转换为 Requires + After，实现服务依赖顺序。
+    Build systemd unit file content.
+    - ExecStart uses bash -lc to ensure setup sourcing and ROS environment are loaded.
+    - launch command is started via exec to avoid an extra persistent shell process.
+    - depends_on is translated to Requires + After.
     """
     shell = runtime.get("shell", "/bin/bash")
     user = runtime.get("user", "root")
@@ -172,21 +173,21 @@ WantedBy={wanted_by}
 
 
 def validate_workspace_for_install(workspace_path: Path, setup_script_rel: str) -> None:
-    """安装类动作前检查工作空间和 setup 脚本是否存在。"""
+    """Validate workspace path and setup script before install actions."""
     if not workspace_path.is_dir():
-        err(f"工作空间不存在: {workspace_path}")
+        err(f"Workspace path does not exist: {workspace_path}")
         sys.exit(1)
 
     setup_script_abs = workspace_path / setup_script_rel
     if not setup_script_abs.is_file():
-        err(f"未找到 setup 脚本: {setup_script_abs}")
+        err(f"Setup script not found: {setup_script_abs}")
         sys.exit(1)
 
 
 def install_only(config: Dict[str, Any], workspace_key: str) -> List[str]:
     """
-    仅安装服务文件，不启动、不设置开机自启。
-    返回值：本次处理的 unit 名称列表。
+    Install unit files only, without starting or enabling them.
+    Returns: list of processed unit names.
     """
     systemd_cfg = config["systemd"]
     runtime_cfg = config["runtime"]
@@ -200,14 +201,14 @@ def install_only(config: Dict[str, Any], workspace_key: str) -> List[str]:
     services = workspace_cfg.get("services", [])
 
     if not services:
-        err(f"workspace {workspace_key} 下 services 为空。")
+        err(f"workspace {workspace_key} has an empty services list.")
         sys.exit(1)
 
     validate_workspace_for_install(workspace_path, setup_script_rel)
 
     unit_names: List[str] = []
     defined_unit_names = {svc["unit_name"] for svc in services}
-    log(f"开始写入 unit 文件到: {unit_dir}")
+    log(f"Writing unit files to: {unit_dir}")
 
     for svc in services:
         unit_name = svc["unit_name"]
@@ -216,17 +217,17 @@ def install_only(config: Dict[str, Any], workspace_key: str) -> List[str]:
         depends_on = svc.get("depends_on", [])
 
         if not isinstance(depends_on, list):
-            err(f"服务 {unit_name} 的 depends_on 必须是列表。")
+            err(f"Service {unit_name} has invalid depends_on: expected a list.")
             sys.exit(1)
 
         for dep_unit in depends_on:
             if dep_unit == unit_name:
-                err(f"服务 {unit_name} 的 depends_on 不能依赖自身。")
+                err(f"Service {unit_name} cannot depend on itself in depends_on.")
                 sys.exit(1)
             if dep_unit not in defined_unit_names:
                 err(
-                    f"服务 {unit_name} 依赖了未定义服务: {dep_unit}，"
-                    f"请确认它存在于同一 workspace.services 中。"
+                    f"Service {unit_name} depends on undefined service: {dep_unit}. "
+                    f"Ensure it exists in the same workspace.services list."
                 )
                 sys.exit(1)
 
@@ -244,29 +245,29 @@ def install_only(config: Dict[str, Any], workspace_key: str) -> List[str]:
         unit_file.write_text(unit_content, encoding="utf-8")
         os.chmod(unit_file, 0o644)
         unit_names.append(unit_name)
-        log(f"已写入: {unit_file}")
+        log(f"Written: {unit_file}")
 
     run_cmd(["systemctl", "daemon-reload"])
-    log("systemd daemon-reload 完成。")
-    log("安装完成（未启动、未设置开机自启）。")
+    log("systemd daemon-reload completed.")
+    log("Install finished (not started, not enabled).")
     return unit_names
 
 
 def install_start_enable(config: Dict[str, Any], workspace_key: str) -> None:
-    """安装服务后，立即启动并设置开机自启。"""
+    """Install services, then start and enable them immediately."""
     unit_names = install_only(config, workspace_key)
-    log("开始启用并启动服务...")
+    log("Enabling and starting services...")
     run_cmd(["systemctl", "enable", "--now", *unit_names])
-    log("完成：服务已启动并设置开机自启。")
-    log(f"可查看状态: systemctl status {' '.join(unit_names)}")
+    log("Completed: services are started and enabled on boot.")
+    log(f"Check status with: systemctl status {' '.join(unit_names)}")
 
 
 def uninstall(config: Dict[str, Any], workspace_key: str) -> None:
     """
-    卸载服务：
-    1) 停止并取消自启
-    2) 删除 unit 文件
-    3) daemon-reload
+    Uninstall services:
+    1) stop and disable
+    2) remove unit files
+    3) run daemon-reload
     """
     systemd_cfg = config["systemd"]
     workspace_cfg = config["workspaces"][workspace_key]
@@ -276,48 +277,48 @@ def uninstall(config: Dict[str, Any], workspace_key: str) -> None:
     unit_names = [svc["unit_name"] for svc in services]
 
     if not unit_names:
-        log(f"workspace {workspace_key} 没有服务可卸载。")
+        log(f"workspace {workspace_key} has no services to uninstall.")
         return
 
-    log("停止并取消开机自启（若已存在）...")
+    log("Stopping and disabling services (if present)...")
     subprocess.run(["systemctl", "disable", "--now", *unit_names], check=False)
 
-    log("删除 unit 文件...")
+    log("Removing unit files...")
     for unit_name in unit_names:
         unit_file = unit_dir / unit_name
         if unit_file.exists():
             unit_file.unlink()
-            log(f"已删除: {unit_file}")
+            log(f"Removed: {unit_file}")
 
     run_cmd(["systemctl", "daemon-reload"])
     subprocess.run(["systemctl", "reset-failed"], check=False)
-    log("卸载完成。")
+    log("Uninstall completed.")
 
 
 def parse_args() -> argparse.Namespace:
     """
-    CLI 设计：
-    - action 是可选位置参数，留空则读取 YAML 默认动作
-    - 通过 --config 指定 YAML 路径
-    - 通过 --workspace-key 选择配置中的某个工作空间
+    CLI design:
+    - action is an optional positional argument
+    - use --config to select YAML path
+    - use --workspace-key to select one workspace entry
     """
     parser = argparse.ArgumentParser(
-        description="ROS2 systemd 服务管理器（读取 YAML 配置）。"
+        description="ROS2 systemd service manager (YAML-driven)."
     )
     parser.add_argument(
         "action",
         nargs="?",
-        help="可选：install-only | install-start-enable | uninstall；不传则用 YAML 默认动作",
+        help="Optional: install-only | install-start-enable | uninstall; defaults to YAML action",
     )
     parser.add_argument(
         "--config",
         default=str(Path(__file__).with_name("ros2_services.yaml")),
-        help="YAML 配置文件路径（默认同目录 ros2_services.yaml）",
+        help="YAML config file path (default: ros2_services.yaml in script directory)",
     )
     parser.add_argument(
         "--workspace-key",
         default=None,
-        help="要操作的工作空间键名（默认取 workspaces 第一项）",
+        help="Workspace key to operate on (default: first key in workspaces)",
     )
     return parser.parse_args()
 
@@ -333,9 +334,9 @@ def main() -> None:
     action = resolve_action(args.action, config)
     workspace_key = resolve_workspace_key(args.workspace_key, config)
 
-    log(f"配置文件: {config_path}")
-    log(f"工作空间键: {workspace_key}")
-    log(f"执行动作: {action}")
+    log(f"Config file: {config_path}")
+    log(f"Workspace key: {workspace_key}")
+    log(f"Action: {action}")
 
     if action == "install-only":
         install_only(config, workspace_key)
@@ -349,8 +350,8 @@ if __name__ == "__main__":
     try:
         main()
     except subprocess.CalledProcessError as exc:
-        err(f"命令执行失败: {' '.join(exc.cmd)} (exit={exc.returncode})")
+        err(f"Command failed: {' '.join(exc.cmd)} (exit={exc.returncode})")
         sys.exit(exc.returncode)
     except KeyError as exc:
-        err(f"配置字段缺失: {exc}")
+        err(f"Missing configuration field: {exc}")
         sys.exit(1)
