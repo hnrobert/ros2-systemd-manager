@@ -1,0 +1,53 @@
+# ROS2 systemd 自动化配置文件
+#
+# 说明：
+# 1) 通过 actions.default_action 指定“无参数时”的默认动作
+# 2) 通过 workspaces 定义多个工作空间，每个空间可绑定一组 ROS2 服务
+# 3) 每个服务会被转换成一个 systemd unit 文件
+# 4) 服务可选 depends_on 字段（列表），用于声明 unit 依赖关系
+#    例如：A depends_on B，则 A unit 会生成 Requires=B 和 After=B
+#
+# 可选动作：
+# - install-only           仅安装服务文件，不启动，不设置开机自启
+# - install-start-enable   安装 + 启动 + 开机自启
+# - uninstall              卸载（停止、取消开机自启、删除服务文件）
+
+actions:
+  supported:
+    - install-only
+    - install-start-enable
+    - uninstall
+  default_action: install-start-enable
+
+systemd:
+  unit_dir: /etc/systemd/system
+  wanted_by: multi-user.target
+
+runtime:
+  # systemd 服务运行身份（你当前使用 root 运行 ros2，这里保持一致）
+  user: root
+  group: root
+  home: /root
+  shell: /bin/bash
+  restart: on-failure
+  restart_sec: 3
+
+workspaces:
+  # 工作空间键名，可通过 --workspace-key 选择
+  infantry_ws:
+    path: /home/infantry/infantry_ws
+    setup_script: install/setup.bash
+    services:
+      - unit_name: ros2-foxglove-bridge.service
+        description: ROS2 Foxglove Bridge
+        launch_command: ros2 launch foxglove_bridge foxglove_bridge_launch.xml
+
+      - unit_name: ros2-soem-bringup.service
+        description: ROS2 SOEM Bringup
+        launch_command: ros2 launch soem_bringup bringup.launch.py
+
+      - unit_name: ros2-infantry-chassis.service
+        description: ROS2 Infantry Chassis Controller
+        depends_on:
+          - ros2-soem-bringup.service
+        launch_command: ros2 launch infantry_controller infantry_chassis.launch.py
