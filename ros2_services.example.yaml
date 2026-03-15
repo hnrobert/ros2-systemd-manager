@@ -49,6 +49,7 @@ workspaces:
 
       - unit_name: ros2-soem-bringup.service
         description: ROS2 SOEM Bringup
+        use_root: true
         launch_command: ros2 launch soem_bringup bringup.launch.py
 
       - unit_name: ros2-infantry-chassis.service
