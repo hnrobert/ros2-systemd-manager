@@ -226,6 +226,7 @@ logs-{service_key}:
         "logs",
         "logs-follow",
         "update",
+        "update-makefile",
         *per_service_targets,
     ])
 
@@ -260,7 +261,8 @@ help:
 	@echo \"  make logs-follow            # follow logs for all configured units\"
 	@echo \"  make <op>-<service>         # op in start/stop/restart/status/enable/disable/logs\"
 	@echo \"  make uninstall              # uninstall all configured units\"
-	@echo \"  make update                 # refresh Makefile from YAML + Python script\"
+	@echo \"  make update                 # full update: install/start/enable + refresh Makefile\"
+	@echo \"  make update-makefile        # refresh Makefile only (no systemd changes)\"
 
 install-only:
 	$(SUDO) $(PYTHON) \"$(EFFECTIVE_SCRIPT)\" install-only --config \"$(EFFECTIVE_CONFIG)\" --workspace-key \"$(WORKSPACE_KEY)\"
@@ -296,6 +298,9 @@ logs-follow:
 	$(SUDO) journalctl $(foreach u,$(UNITS),-u $(u)) -f
 
 update:
+	$(SUDO) $(PYTHON) \"$(EFFECTIVE_SCRIPT)\" install-start-enable --config \"$(EFFECTIVE_CONFIG)\" --workspace-key \"$(WORKSPACE_KEY)\"
+
+update-makefile:
 	$(PYTHON) \"$(EFFECTIVE_SCRIPT)\" update-makefile --config \"$(EFFECTIVE_CONFIG)\" --workspace-key \"$(WORKSPACE_KEY)\"
 
 {per_service_blocks_text}

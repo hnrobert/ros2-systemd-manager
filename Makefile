@@ -11,7 +11,7 @@ UNITS := ros2-foxglove-bridge.service ros2-soem-bringup.service ros2-infantry-ch
 EFFECTIVE_SCRIPT := $(if $(strip $(SCRIPT)),$(SCRIPT),./ros2_systemd_manager.py)
 EFFECTIVE_CONFIG := $(if $(strip $(CONFIG)),$(CONFIG),./ros2_services.yaml)
 
-.PHONY: help install-only install-start-enable uninstall start stop restart status enable disable logs logs-follow update start-ros2-foxglove-bridge stop-ros2-foxglove-bridge restart-ros2-foxglove-bridge status-ros2-foxglove-bridge enable-ros2-foxglove-bridge disable-ros2-foxglove-bridge logs-ros2-foxglove-bridge start-ros2-soem-bringup stop-ros2-soem-bringup restart-ros2-soem-bringup status-ros2-soem-bringup enable-ros2-soem-bringup disable-ros2-soem-bringup logs-ros2-soem-bringup start-ros2-infantry-chassis stop-ros2-infantry-chassis restart-ros2-infantry-chassis status-ros2-infantry-chassis enable-ros2-infantry-chassis disable-ros2-infantry-chassis logs-ros2-infantry-chassis
+.PHONY: help install-only install-start-enable uninstall start stop restart status enable disable logs logs-follow update update-makefile start-ros2-foxglove-bridge stop-ros2-foxglove-bridge restart-ros2-foxglove-bridge status-ros2-foxglove-bridge enable-ros2-foxglove-bridge disable-ros2-foxglove-bridge logs-ros2-foxglove-bridge start-ros2-soem-bringup stop-ros2-soem-bringup restart-ros2-soem-bringup status-ros2-soem-bringup enable-ros2-soem-bringup disable-ros2-soem-bringup logs-ros2-soem-bringup start-ros2-infantry-chassis stop-ros2-infantry-chassis restart-ros2-infantry-chassis status-ros2-infantry-chassis enable-ros2-infantry-chassis disable-ros2-infantry-chassis logs-ros2-infantry-chassis
 
 help:
 	@echo "Targets:"
@@ -27,7 +27,8 @@ help:
 	@echo "  make logs-follow            # follow logs for all configured units"
 	@echo "  make <op>-<service>         # op in start/stop/restart/status/enable/disable/logs"
 	@echo "  make uninstall              # uninstall all configured units"
-	@echo "  make update                 # refresh Makefile from YAML + Python script"
+	@echo "  make update                 # full update: install/start/enable + refresh Makefile"
+	@echo "  make update-makefile        # refresh Makefile only (no systemd changes)"
 
 install-only:
 	$(SUDO) $(PYTHON) "$(EFFECTIVE_SCRIPT)" install-only --config "$(EFFECTIVE_CONFIG)" --workspace-key "$(WORKSPACE_KEY)"
@@ -63,6 +64,9 @@ logs-follow:
 	$(SUDO) journalctl $(foreach u,$(UNITS),-u $(u)) -f
 
 update:
+	$(SUDO) $(PYTHON) "$(EFFECTIVE_SCRIPT)" install-start-enable --config "$(EFFECTIVE_CONFIG)" --workspace-key "$(WORKSPACE_KEY)"
+
+update-makefile:
 	$(PYTHON) "$(EFFECTIVE_SCRIPT)" update-makefile --config "$(EFFECTIVE_CONFIG)" --workspace-key "$(WORKSPACE_KEY)"
 
 
