@@ -10,14 +10,14 @@
 #    Example: CapabilityBoundingSet=... / AmbientCapabilities=...
 #
 # Supported actions:
-# - install-only           Install unit files only, do not start or enable
-# - install-start-enable   Install + start + enable on boot
+# - install                Install unit files only, do not start or enable
+# - apply                  Install + start + enable on boot
 # - uninstall              Uninstall (stop, disable, remove unit files)
-# - sync-update            Stop previous units, remove stale units, then install/start/enable current units
-# - update-makefile        Regenerate Makefile only (no systemd changes)
+# - update                 Stop previous units, remove stale units, then install/start/enable current units
+# - makefile               Regenerate Makefile only (no systemd changes)
 
 actions:
-  default_action: install-start-enable
+  default_action: apply
 
 systemd:
   unit_dir: /etc/systemd/system
@@ -36,6 +36,8 @@ runtime:
 makefile:
   # Path for generated Makefile. Relative path is based on this YAML directory.
   output_path: ./Makefile
+  # CLI command used by generated Makefile recipes.
+  command: ros2-systemd-manager
 
 workspaces:
   # Workspace key, selectable via --workspace-key

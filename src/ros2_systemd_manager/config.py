@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 
 import yaml
 
-from .actions import SUPPORTED_ACTIONS
+from .actions import SUPPORTED_ACTIONS, normalize_action
 from .runtime import err
 
 
@@ -41,6 +41,12 @@ def validate_config(config: Dict[str, Any]) -> None:
         err("makefile must be a mapping when provided.")
         sys.exit(1)
 
+    if isinstance(makefile_cfg, dict) and "command" in makefile_cfg:
+        command = makefile_cfg.get("command")
+        if not isinstance(command, str) or not command.strip():
+            err("makefile.command must be a non-empty string when provided.")
+            sys.exit(1)
+
     for workspace_key, workspace_cfg in workspaces.items():
         if not isinstance(workspace_cfg, dict):
             err(f"workspace '{workspace_key}' must be a mapping.")
@@ -76,12 +82,15 @@ def validate_config(config: Dict[str, Any]) -> None:
 
 def resolve_action(cli_action: Optional[str], config: Dict[str, Any]) -> str:
     """Resolve action from CLI or YAML defaults."""
-    default_action = config.get("actions", {}).get(
-        "default_action", "install-start-enable")
-    action = cli_action or default_action
+    default_action = config.get("actions", {}).get("default_action", "apply")
+    action_raw = cli_action or default_action
+    action = normalize_action(action_raw)
 
     if action not in SUPPORTED_ACTIONS:
-        err(f"Unsupported action: {action}. Allowed: {sorted(SUPPORTED_ACTIONS)}")
+        err(
+            f"Unsupported action: {action_raw}. "
+            f"Allowed: {sorted(SUPPORTED_ACTIONS)}"
+        )
         sys.exit(1)
 
     return action
