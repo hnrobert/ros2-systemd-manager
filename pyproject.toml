@@ -9,6 +9,20 @@ description = "YAML-driven ROS2 systemd service manager"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = ["PyYAML>=6.0"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: POSIX :: Linux",
+]
+
+[project.urls]
+Homepage = "https://github.com/hnrobert/ros2-systemd-manager"
+Repository = "https://github.com/hnrobert/ros2-systemd-manager"
+Issues = "https://github.com/hnrobert/ros2-systemd-manager/issues"
 
 [project.scripts]
 ros2-systemd-manager = "ros2_systemd_manager.cli:entrypoint"

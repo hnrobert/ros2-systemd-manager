@@ -20,7 +20,7 @@ jobs:
 
     permissions:
       contents: write
-      packages: write
+      id-token: write
 
     steps:
       - name: Checkout repository
@@ -82,10 +82,7 @@ jobs:
         run: python -m build --sdist --wheel
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@v1.5.0
-        with:
-          user: __token__
-          password: ${{ secrets.PYPI_API_TOKEN }}
+        uses: pypa/gh-action-pypi-publish@release/v1
 
       - name: Create GitHub Release and upload artifacts
         if: ${{ github.event.inputs.tag }}
