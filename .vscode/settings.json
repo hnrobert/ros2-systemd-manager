@@ -4,6 +4,7 @@
         "firstword",
         "geteuid",
         "journalctl",
+        "setuptools",
         "soem"
     ],
     "python.analysis.extraPaths": [

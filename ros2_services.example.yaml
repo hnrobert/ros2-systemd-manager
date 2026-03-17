@@ -13,13 +13,10 @@
 # - install-only           Install unit files only, do not start or enable
 # - install-start-enable   Install + start + enable on boot
 # - uninstall              Uninstall (stop, disable, remove unit files)
+# - sync-update            Stop previous units, remove stale units, then install/start/enable current units
 # - update-makefile        Regenerate Makefile only (no systemd changes)
 
 actions:
-  supported:
-    - install-only
-    - install-start-enable
-    - uninstall
   default_action: install-start-enable
 
 systemd:
@@ -48,6 +45,8 @@ workspaces:
     services:
       - unit_name: ros2-foxglove-bridge.service
         description: ROS2 Foxglove Bridge
+        # Optional: default false. When true, force this service to run as root.
+        use_root: false
         launch_command: ros2 launch foxglove_bridge foxglove_bridge_launch.xml
 
       - unit_name: ros2-soem-bringup.service
