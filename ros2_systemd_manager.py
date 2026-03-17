@@ -37,6 +37,7 @@ SUPPORTED_ACTIONS = {
     "install-only",
     "install-start-enable",
     "uninstall",
+    "sync-update",
     "update-makefile",
 }
 
@@ -215,6 +216,7 @@ def build_makefile_content(
             f"enable-{service_key}",
             f"disable-{service_key}",
             f"logs-{service_key}",
+            f"logs-recent-{service_key}",
         ])
 
         per_service_blocks.append(
@@ -238,6 +240,9 @@ disable-{service_key}:
 	$(SUDO) systemctl disable \"{unit_name}\"
 
 logs-{service_key}:
+	$(SUDO) journalctl -u \"{unit_name}\" -n 100 -f
+
+logs-recent-{service_key}:
 	$(SUDO) journalctl -u \"{unit_name}\" -n 200 --no-pager
 """.rstrip()
         )
@@ -290,8 +295,9 @@ help:
 	@echo \"  make logs                   # show last 200 log lines for all configured units\"
 	@echo \"  make logs-follow            # follow logs for all configured units\"
 	@echo \"  make <op>-<service>         # op in start/stop/restart/status/enable/disable/logs\"
+	@echo \"  make logs-recent-<service>  # show last 200 log lines for one service\"
 	@echo \"  make uninstall              # uninstall all configured units\"
-	@echo \"  make update                 # full update: install/start/enable + refresh Makefile\"
+	@echo \"  make update                 # stop old + uninstall removed + install/start/enable + refresh Makefile\"
 	@echo \"  make update-makefile        # refresh Makefile only (no systemd changes)\"
 
 install-only:
@@ -328,7 +334,7 @@ logs-follow:
 	$(SUDO) journalctl $(foreach u,$(UNITS),-u $(u)) -f
 
 update:
-	$(SUDO) $(PYTHON) \"$(EFFECTIVE_SCRIPT)\" install-start-enable --config \"$(EFFECTIVE_CONFIG)\" --workspace-key \"$(WORKSPACE_KEY)\"
+	$(SUDO) $(PYTHON) \"$(EFFECTIVE_SCRIPT)\" sync-update --config \"$(EFFECTIVE_CONFIG)\" --workspace-key \"$(WORKSPACE_KEY)\" --previous-makefile \"$(firstword $(MAKEFILE_LIST))\"
 
 update-makefile:
 	$(PYTHON) \"$(EFFECTIVE_SCRIPT)\" update-makefile --config \"$(EFFECTIVE_CONFIG)\" --workspace-key \"$(WORKSPACE_KEY)\"
@@ -531,6 +537,68 @@ def install_start_enable(config: Dict[str, Any], workspace_key: str) -> None:
     log(f"Check status with: systemctl status {' '.join(unit_names)}")
 
 
+def get_workspace_unit_names(config: Dict[str, Any], workspace_key: str) -> List[str]:
+    """Get configured unit names for the selected workspace."""
+    workspace_cfg = config["workspaces"][workspace_key]
+    services = workspace_cfg.get("services", [])
+    return [svc["unit_name"] for svc in services]
+
+
+def parse_units_from_makefile(makefile_path: Path) -> List[str]:
+    """Parse the UNITS variable from an existing Makefile."""
+    if not makefile_path.exists():
+        return []
+
+    for raw_line in makefile_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if line.startswith("UNITS :="):
+            units_text = line.split(":=", 1)[1].strip()
+            return [item for item in units_text.split() if item]
+
+    return []
+
+
+def remove_units(unit_dir: Path, unit_names: List[str]) -> None:
+    """Disable/stop and remove specified unit files if they exist."""
+    if not unit_names:
+        return
+
+    log(f"Disabling and stopping removed units: {' '.join(unit_names)}")
+    subprocess.run(["systemctl", "disable", "--now", *unit_names], check=False)
+
+    for unit_name in unit_names:
+        unit_file = unit_dir / unit_name
+        if unit_file.exists():
+            unit_file.unlink()
+            log(f"Removed stale unit file: {unit_file}")
+
+    run_cmd(["systemctl", "daemon-reload"])
+    subprocess.run(["systemctl", "reset-failed"], check=False)
+
+
+def sync_update(config: Dict[str, Any], workspace_key: str, previous_makefile: Path | None) -> None:
+    """Stop old units, remove stale units, then install/start/enable current units."""
+    systemd_cfg = config["systemd"]
+    unit_dir = Path(systemd_cfg.get("unit_dir", "/etc/systemd/system"))
+
+    current_units = get_workspace_unit_names(config, workspace_key)
+    previous_units = parse_units_from_makefile(
+        previous_makefile) if previous_makefile else []
+
+    if previous_units:
+        log(
+            f"Stopping previous units before update: {' '.join(previous_units)}")
+        subprocess.run(["systemctl", "stop", *previous_units], check=False)
+
+    stale_units = sorted(set(previous_units) - set(current_units))
+    if stale_units:
+        remove_units(unit_dir, stale_units)
+    else:
+        log("No stale units detected from previous Makefile.")
+
+    install_start_enable(config, workspace_key)
+
+
 def uninstall(config: Dict[str, Any], workspace_key: str) -> None:
     """
     Uninstall services:
@@ -578,7 +646,7 @@ def parse_args() -> argparse.Namespace:
         "action",
         nargs="?",
         help=(
-            "Optional: install-only | install-start-enable | uninstall | update-makefile; "
+            "Optional: install-only | install-start-enable | uninstall | sync-update | update-makefile; "
             "defaults to YAML action"
         ),
     )
@@ -591,6 +659,11 @@ def parse_args() -> argparse.Namespace:
         "--workspace-key",
         default=None,
         help="Workspace key to operate on (default: first key in workspaces)",
+    )
+    parser.add_argument(
+        "--previous-makefile",
+        default=None,
+        help="Optional path to previous Makefile for stale-unit detection during sync-update",
     )
     return parser.parse_args()
 
@@ -617,6 +690,10 @@ def main() -> None:
         install_start_enable(config, workspace_key)
     elif action == "uninstall":
         uninstall(config, workspace_key)
+    elif action == "sync-update":
+        previous_makefile = Path(
+            args.previous_makefile) if args.previous_makefile else None
+        sync_update(config, workspace_key, previous_makefile)
     elif action == "update-makefile":
         log("Skipping systemd operations; refreshing Makefile only.")
 
