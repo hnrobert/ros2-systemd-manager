@@ -4,7 +4,6 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
 
 from .config import (load_yaml_config, resolve_action, resolve_workspace_keys,
                      validate_config)
