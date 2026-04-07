@@ -10,6 +10,15 @@ ROS2 Systemd Manager is a YAML-driven tool to manage ROS2 launch tasks as system
 - Remove units with `uninstall`
 - Run synchronized update flow with stale-unit cleanup via `update`
 - Regenerate Makefile only with `makefile`
+- Upgrade tool to latest version via `upgrade`
+
+## Installation
+
+> **Note:** This tool is designed for Linux systems with systemd. Ensure you have Python 3 and pip installed. It is recommended to use sudo for installation to allow systemd unit management.
+
+```bash
+sudo pip install ros2-systemd-manager
+```
 
 ## CLI
 
@@ -23,6 +32,7 @@ Supported actions:
 - `uninstall`
 - `update`
 - `makefile`
+- `upgrade`
 
 ## Init Output
 
@@ -34,8 +44,11 @@ ros2-systemd-manager init
 
 Generated files:
 
-- `./ros2_services.yaml`
-- `./Makefile`
+- `./ros2_services.yaml` (default configuration)
+- `./ros2-systemd-manager.mk` (generated makefile targets fragment)
+- `./Makefile` (entrypoint that includes the `.mk` file)
+
+> **Note:** The tool places generated makefile targets into `ros2-systemd-manager.mk` to keep your root `Makefile` clean. The root `Makefile` will automatically include the `.mk` fragment.
 
 ## YAML Keys
 
@@ -59,6 +72,7 @@ Primary targets:
 - `make uninstall`
 - `make update`
 - `make makefile`
+- `make upgrade`
 - `make start|stop|restart|status|enable|disable`
 - `make logs` / `make logs-recent`
 - `make <op>-<service>` (op in start/stop/restart/status/enable/disable/logs/logs-recent)
@@ -66,8 +80,8 @@ Primary targets:
 Config behavior:
 
 - No hardcoded absolute config path.
-- Auto-discovery in current directory: `./ros2_services.yaml`, then first `./*.yaml`.
-- Override manually:
+- **Default auto-discovery strictly looks for `./ros2_services.yaml` in the current running directory.**
+- Override manually via `CONFIG` environment variable or `--config` parameter:
 
 ```bash
 make apply CONFIG=./my_services.yaml

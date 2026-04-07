@@ -41,21 +41,19 @@ runtime:
   restart_sec: 3
 
 workspaces:
-  # Workspace key, selectable via --workspace-key
-  default_ws:
+  default_ws: # Workspace key, selectable via --workspace-key
     path: /home/user/default_ws
     setup_script: install/setup.bash
     services:
       - unit_name: ros2-foxglove-bridge.service
         description: ROS2 Foxglove Bridge
-        # Optional: default false. When true, force this service to run as root.
-        use_root: false
+        use_root: false # Optional: default false. When true, force this service to run as root.
         launch_command: ros2 launch foxglove_bridge foxglove_bridge_launch.xml
 
       - unit_name: ros2-soem-bringup.service
-        description: ROS2 SOEM Bringup
+        description: ROS2 Simple Open EtherCAT Master Bringup (https://github.com/AIMEtherCAT/EcatV2_Master)
         use_root: false
-        service_options:
+        service_options: # Example of granting specific capabilities to a service without running as root
           - CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
           - AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
         launch_command: ros2 launch soem_bringup bringup.launch.py
@@ -65,3 +63,14 @@ workspaces:
         depends_on:
           - ros2-soem-bringup.service
         launch_command: ros2 launch infantry_controller infantry_chassis.launch.py
+
+      - unit_name: ros2-sp-vision-autoaim.service
+        description: TongjiSuperPower/sp_vision_25 Auto Aim (via self defined sp_vision_launch)
+        service_options:
+          - CPUAffinity=1 2 3 # Example of setting CPU affinity for a service
+        launch_command: ros2 launch sp_vision_launch sp_vision.launch.py config:=sentry.yaml
+
+  # You can define additional workspaces with their own services here, e.g.:
+  # another_ws:
+  #   path: ...
+  #   ...
