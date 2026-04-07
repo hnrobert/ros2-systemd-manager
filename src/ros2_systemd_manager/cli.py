@@ -33,9 +33,9 @@ def _get_version() -> str:
 
 def parse_args() -> argparse.Namespace:
     description = (
-        "==========================================================\n"
+        "===========================================================\n"
         "   ROS2 Systemd Manager - Declarative Service Management\n"
-        "==========================================================\n\n"
+        "===========================================================\n\n"
         "Automate the deployment, tracking, and management of systemd\n"
         "services for ROS 2 workspaces using a single YAML file."
     )
@@ -71,7 +71,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "action",
         nargs="?",
-        help="Action to perform (default: specified in YAML actions.default_action)",
+        help="Action to perform (default: actions.default_action in YAML)",
     )
     parser.add_argument(
         "-c", "--config",
