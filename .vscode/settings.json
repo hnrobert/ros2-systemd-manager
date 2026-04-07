@@ -6,10 +6,12 @@
         "firstword",
         "geteuid",
         "journalctl",
+        "keepends",
         "lastword",
         "pycache",
         "setuptools",
-        "soem"
+        "soem",
+        "tofile"
     ],
     "python.analysis.extraPaths": [
         "./src"

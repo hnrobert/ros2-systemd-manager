@@ -67,15 +67,25 @@ Optional:
 
 Primary targets:
 
-- `make install`
-- `make apply`
-- `make uninstall`
-- `make update`
-- `make makefile`
-- `make upgrade`
-- `make start|stop|restart|status|enable|disable`
-- `make logs` / `make logs-recent`
-- `make <op>-<service>` (op in start/stop/restart/status/enable/disable/logs/logs-recent)
+```bash
+make upgrade                  # self-upgrade ros2-systemd-manager via pip
+make install                  # install unit files only
+make apply                    # install + start + enable
+make start                    # systemctl start all configured units
+make stop                     # systemctl stop all configured units
+make restart                  # systemctl restart all configured units
+make status                   # systemctl status all configured units
+make status-long              # systemctl status with 100 log lines
+make enable                   # systemctl enable all configured units
+make disable                  # systemctl disable all configured units
+make logs                     # follow logs for all configured units
+make logs-recent              # show last 200 log lines for all configured units
+make <op>-<service>           # op in start/stop/restart/status/enable/disable/logs
+make <op>-<service>-<sfx>     # e.g., logs-<svc>-recent, status-<svc>-long (100 lines)
+make uninstall                # uninstall all configured units
+make update                   # stop old + uninstall + install/start/enable + refresh mk
+make makefile                 # refresh generated mk only (no systemd changes)
+```
 
 Config behavior:
 
@@ -86,6 +96,11 @@ Config behavior:
 ```bash
 make apply CONFIG=./my_services.yaml
 ```
+
+## File Tracking & Safety
+
+- **Automatic Backups**: Whenever files in `/etc/systemd/system/` are modified (via `update`, `install`, or `uninstall`), a copy of the exact deployed file along with its MD5 hash (and a global hash) is stored in `~/.config/ros2-systemd-manager/previous-update/`.
+- **Modification Detection**: During `update` or `uninstall` operations, the manager uses `filecmp` and `diff` to check if you have manually modified the systemd service file. If modifications are detected, it presents a diff in the terminal and asks if you want to archive your manual changes to `~/.config/ros2-systemd-manager/archive/` before proceeding with the overwrite/deletion.
 
 ## Safety
 

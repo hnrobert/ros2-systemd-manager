@@ -4,14 +4,14 @@
 SUDO ?= sudo
 SCRIPT ?= ros2-systemd-manager
 CONFIG ?=
-WORKSPACE_KEY := default_ws
-UNITS := ros2-foxglove-bridge.service ros2-soem-bringup.service ros2-infantry-chassis.service
+WORKSPACE_KEY ?=
+UNITS := ros2-foxglove-bridge.service ros2-soem-bringup.service ros2-infantry-chassis.service ros2-sp-vision-autoaim.service
 GENERATED_MK := $(lastword $(MAKEFILE_LIST))
 
 EFFECTIVE_SCRIPT := $(if $(strip $(SCRIPT)),$(SCRIPT),ros2-systemd-manager)
 EFFECTIVE_CONFIG := $(if $(strip $(CONFIG)),$(CONFIG),$(firstword $(wildcard ./ros2_services.yaml ./*.yaml)))
 
-.PHONY: help upgrade ensure-config install apply uninstall start stop restart status enable disable logs logs-recent update makefile start-ros2-foxglove-bridge stop-ros2-foxglove-bridge restart-ros2-foxglove-bridge status-ros2-foxglove-bridge enable-ros2-foxglove-bridge disable-ros2-foxglove-bridge logs-ros2-foxglove-bridge logs-recent-ros2-foxglove-bridge start-ros2-soem-bringup stop-ros2-soem-bringup restart-ros2-soem-bringup status-ros2-soem-bringup enable-ros2-soem-bringup disable-ros2-soem-bringup logs-ros2-soem-bringup logs-recent-ros2-soem-bringup start-ros2-infantry-chassis stop-ros2-infantry-chassis restart-ros2-infantry-chassis status-ros2-infantry-chassis enable-ros2-infantry-chassis disable-ros2-infantry-chassis logs-ros2-infantry-chassis logs-recent-ros2-infantry-chassis
+.PHONY: help upgrade ensure-config install apply uninstall start stop restart status status-long enable disable logs logs-recent update makefile start-ros2-foxglove-bridge stop-ros2-foxglove-bridge restart-ros2-foxglove-bridge status-ros2-foxglove-bridge status-ros2-foxglove-bridge-long enable-ros2-foxglove-bridge disable-ros2-foxglove-bridge logs-ros2-foxglove-bridge logs-ros2-foxglove-bridge-recent start-ros2-soem-bringup stop-ros2-soem-bringup restart-ros2-soem-bringup status-ros2-soem-bringup status-ros2-soem-bringup-long enable-ros2-soem-bringup disable-ros2-soem-bringup logs-ros2-soem-bringup logs-ros2-soem-bringup-recent start-ros2-infantry-chassis stop-ros2-infantry-chassis restart-ros2-infantry-chassis status-ros2-infantry-chassis status-ros2-infantry-chassis-long enable-ros2-infantry-chassis disable-ros2-infantry-chassis logs-ros2-infantry-chassis logs-ros2-infantry-chassis-recent start-ros2-sp-vision-autoaim stop-ros2-sp-vision-autoaim restart-ros2-sp-vision-autoaim status-ros2-sp-vision-autoaim status-ros2-sp-vision-autoaim-long enable-ros2-sp-vision-autoaim disable-ros2-sp-vision-autoaim logs-ros2-sp-vision-autoaim logs-ros2-sp-vision-autoaim-recent
 
 help:
 	@echo "Targets:"
@@ -22,11 +22,12 @@ help:
 	@echo "  make stop                   # systemctl stop all configured units"
 	@echo "  make restart                # systemctl restart all configured units"
 	@echo "  make status                 # systemctl status all configured units"
+	@echo "  make status-long            # systemctl status with 100 log lines"
 	@echo "  make enable                 # systemctl enable all configured units"
 	@echo "  make disable                # systemctl disable all configured units"
 	@echo "  make logs                   # follow logs for all configured units"
-	@echo "  make logs-recent            # show last 200 log lines for all configured units"
-	@echo "  make <op>-<service>         # op in start/stop/restart/status/enable/disable/logs/logs-recent"
+	@echo "  make <op>-<service>         # op in start/stop/restart/status/enable/disable/logs"
+	@echo "  make <op>-<service>-<sfx>   # e.g. status-<svc>-long, logs-<svc>-recent"
 	@echo "  make uninstall              # uninstall all configured units"
 	@echo "  make update                 # stop old + uninstall removed + install/start/enable + refresh generated mk"
 	@echo "  make makefile               # refresh generated mk only (no systemd changes)"
@@ -62,6 +63,9 @@ restart:
 status:
 	$(SUDO) systemctl status $(UNITS)
 
+status-long:
+	$(SUDO) systemctl status $(UNITS) --no-pager -l -n 100
+
 enable:
 	$(SUDO) systemctl enable $(UNITS)
 
@@ -93,6 +97,9 @@ restart-ros2-foxglove-bridge:
 status-ros2-foxglove-bridge:
 	$(SUDO) systemctl status "ros2-foxglove-bridge.service"
 
+status-ros2-foxglove-bridge-long:
+	$(SUDO) systemctl status "ros2-foxglove-bridge.service" --no-pager -l -n 100
+
 enable-ros2-foxglove-bridge:
 	$(SUDO) systemctl enable "ros2-foxglove-bridge.service"
 
@@ -102,7 +109,7 @@ disable-ros2-foxglove-bridge:
 logs-ros2-foxglove-bridge:
 	$(SUDO) journalctl -u "ros2-foxglove-bridge.service" -n 100 -f
 
-logs-recent-ros2-foxglove-bridge:
+logs-ros2-foxglove-bridge-recent:
 	$(SUDO) journalctl -u "ros2-foxglove-bridge.service" -n 200 --no-pager
 
 
@@ -118,6 +125,9 @@ restart-ros2-soem-bringup:
 status-ros2-soem-bringup:
 	$(SUDO) systemctl status "ros2-soem-bringup.service"
 
+status-ros2-soem-bringup-long:
+	$(SUDO) systemctl status "ros2-soem-bringup.service" --no-pager -l -n 100
+
 enable-ros2-soem-bringup:
 	$(SUDO) systemctl enable "ros2-soem-bringup.service"
 
@@ -127,7 +137,7 @@ disable-ros2-soem-bringup:
 logs-ros2-soem-bringup:
 	$(SUDO) journalctl -u "ros2-soem-bringup.service" -n 100 -f
 
-logs-recent-ros2-soem-bringup:
+logs-ros2-soem-bringup-recent:
 	$(SUDO) journalctl -u "ros2-soem-bringup.service" -n 200 --no-pager
 
 
@@ -143,6 +153,9 @@ restart-ros2-infantry-chassis:
 status-ros2-infantry-chassis:
 	$(SUDO) systemctl status "ros2-infantry-chassis.service"
 
+status-ros2-infantry-chassis-long:
+	$(SUDO) systemctl status "ros2-infantry-chassis.service" --no-pager -l -n 100
+
 enable-ros2-infantry-chassis:
 	$(SUDO) systemctl enable "ros2-infantry-chassis.service"
 
@@ -152,5 +165,33 @@ disable-ros2-infantry-chassis:
 logs-ros2-infantry-chassis:
 	$(SUDO) journalctl -u "ros2-infantry-chassis.service" -n 100 -f
 
-logs-recent-ros2-infantry-chassis:
+logs-ros2-infantry-chassis-recent:
 	$(SUDO) journalctl -u "ros2-infantry-chassis.service" -n 200 --no-pager
+
+
+start-ros2-sp-vision-autoaim:
+	$(SUDO) systemctl start "ros2-sp-vision-autoaim.service"
+
+stop-ros2-sp-vision-autoaim:
+	$(SUDO) systemctl stop "ros2-sp-vision-autoaim.service"
+
+restart-ros2-sp-vision-autoaim:
+	$(SUDO) systemctl restart "ros2-sp-vision-autoaim.service"
+
+status-ros2-sp-vision-autoaim:
+	$(SUDO) systemctl status "ros2-sp-vision-autoaim.service"
+
+status-ros2-sp-vision-autoaim-long:
+	$(SUDO) systemctl status "ros2-sp-vision-autoaim.service" --no-pager -l -n 100
+
+enable-ros2-sp-vision-autoaim:
+	$(SUDO) systemctl enable "ros2-sp-vision-autoaim.service"
+
+disable-ros2-sp-vision-autoaim:
+	$(SUDO) systemctl disable "ros2-sp-vision-autoaim.service"
+
+logs-ros2-sp-vision-autoaim:
+	$(SUDO) journalctl -u "ros2-sp-vision-autoaim.service" -n 100 -f
+
+logs-ros2-sp-vision-autoaim-recent:
+	$(SUDO) journalctl -u "ros2-sp-vision-autoaim.service" -n 200 --no-pager

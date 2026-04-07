@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .runtime import err, log, run_cmd
+from .version_control import (check_and_prompt_for_modifications,
+                              record_uninstall, record_update)
 
 
 def build_unit_content(
@@ -131,8 +133,16 @@ def install_only(config: Dict[str, Any], workspace_key: str) -> List[str]:
         )
 
         unit_file = unit_dir / unit_name
+
+        if not check_and_prompt_for_modifications(unit_file, unit_name):
+            err(f"Operation cancelled during processing of {unit_name}.")
+            sys.exit(1)
+
         unit_file.write_text(unit_content, encoding="utf-8")
         os.chmod(unit_file, 0o644)
+
+        record_update(unit_name, unit_content)
+
         unit_names.append(unit_name)
         log(f"Written: {unit_file}")
 
@@ -182,9 +192,16 @@ def remove_units(unit_dir: Path, unit_names: List[str]) -> None:
 
     for unit_name in unit_names:
         unit_file = unit_dir / unit_name
+
+        if not check_and_prompt_for_modifications(unit_file, unit_name):
+            err(f"Operation cancelled during processing of {unit_name}.")
+            sys.exit(1)
+
         if unit_file.exists():
             unit_file.unlink()
             log(f"Removed stale unit file: {unit_file}")
+
+        record_uninstall(unit_name)
 
     run_cmd(["systemctl", "daemon-reload"])
     subprocess.run(["systemctl", "reset-failed"], check=False)
@@ -232,9 +249,16 @@ def uninstall(config: Dict[str, Any], workspace_key: str) -> None:
     log("Removing unit files...")
     for unit_name in unit_names:
         unit_file = unit_dir / unit_name
+
+        if not check_and_prompt_for_modifications(unit_file, unit_name):
+            err(f"Operation cancelled during processing of {unit_name}.")
+            sys.exit(1)
+
         if unit_file.exists():
             unit_file.unlink()
             log(f"Removed: {unit_file}")
+
+        record_uninstall(unit_name)
 
     run_cmd(["systemctl", "daemon-reload"])
     subprocess.run(["systemctl", "reset-failed"], check=False)
