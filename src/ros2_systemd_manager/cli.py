@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from .config import (load_yaml_config, resolve_action, resolve_workspace_key,
+from .config import (load_yaml_config, resolve_action, resolve_workspace_keys,
                      validate_config)
 from .makefile_gen import write_makefile
 from .runtime import err, log, require_root
@@ -45,11 +45,6 @@ def parse_args() -> argparse.Namespace:
         help="Workspace key to operate on (default: first key in workspaces)",
     )
     parser.add_argument(
-        "--previous-makefile",
-        default=None,
-        help="Optional path to previous Makefile for stale-unit detection during update",
-    )
-    parser.add_argument(
         "--force",
         action="store_true",
         help="Overwrite files when used with init",
@@ -78,8 +73,7 @@ def run() -> None:
     if action_arg == "init":
         target_config = Path(args.config) if args.config else (
             Path.cwd() / "ros2_services.yaml")
-        target_workspace_key = args.workspace_key or "default_ws"
-        init_defaults(target_config, target_workspace_key, force=args.force)
+        init_defaults(target_config, force=args.force)
         return
 
     if action_arg == "upgrade":
@@ -92,33 +86,31 @@ def run() -> None:
     validate_config(config)
 
     action = resolve_action(action_arg, config)
-    workspace_key = resolve_workspace_key(args.workspace_key, config)
+    workspace_keys = resolve_workspace_keys(args.workspace_key, config)
 
     if action not in {"makefile", "upgrade"}:
         require_root()
 
     log(f"Config file: {config_path}")
-    log(f"Workspace key: {workspace_key}")
+    log(f"Workspace keys: {workspace_keys}")
     log(f"Action: {action}")
 
     if action == "install":
-        install_only(config, workspace_key)
+        install_only(config, workspace_keys)
     elif action == "apply":
-        install_start_enable(config, workspace_key)
+        install_start_enable(config, workspace_keys)
     elif action == "uninstall":
-        uninstall(config, workspace_key)
+        uninstall(config, workspace_keys)
     elif action == "update":
-        previous_makefile: Optional[Path] = (
-            Path(args.previous_makefile) if args.previous_makefile else None
-        )
-        sync_update(config, workspace_key, previous_makefile)
+        
+        sync_update(config, workspace_keys)
     elif action == "upgrade":
         _upgrade_self()
         return
     elif action == "makefile":
         log("Skipping systemd operations; refreshing Makefile only.")
 
-    write_makefile(config, config_path, workspace_key)
+    write_makefile(config, config_path)
 
 
 def entrypoint() -> int:

@@ -43,13 +43,13 @@ upgrade:
 	$(EFFECTIVE_SCRIPT) upgrade
 
 install: ensure-config
-	$(SUDO) $(EFFECTIVE_SCRIPT) install --config "$(EFFECTIVE_CONFIG)" --workspace-key "$(WORKSPACE_KEY)"
+	$(SUDO) $(EFFECTIVE_SCRIPT) install --config "$(EFFECTIVE_CONFIG)"
 
 apply: ensure-config
-	$(SUDO) $(EFFECTIVE_SCRIPT) apply --config "$(EFFECTIVE_CONFIG)" --workspace-key "$(WORKSPACE_KEY)"
+	$(SUDO) $(EFFECTIVE_SCRIPT) apply --config "$(EFFECTIVE_CONFIG)"
 
 uninstall: ensure-config
-	$(SUDO) $(EFFECTIVE_SCRIPT) uninstall --config "$(EFFECTIVE_CONFIG)" --workspace-key "$(WORKSPACE_KEY)"
+	$(SUDO) $(EFFECTIVE_SCRIPT) uninstall --config "$(EFFECTIVE_CONFIG)"
 
 start:
 	$(SUDO) systemctl start $(UNITS)
@@ -79,10 +79,10 @@ logs-recent:
 	$(SUDO) journalctl $(foreach u,$(UNITS),-u $(u)) -n 200 --no-pager
 
 update: ensure-config
-	$(SUDO) $(EFFECTIVE_SCRIPT) update --config "$(EFFECTIVE_CONFIG)" --workspace-key "$(WORKSPACE_KEY)" --previous-makefile "$(GENERATED_MK)"
+	$(SUDO) $(EFFECTIVE_SCRIPT) update --config "$(EFFECTIVE_CONFIG)"
 
 makefile: ensure-config
-	$(EFFECTIVE_SCRIPT) makefile --config "$(EFFECTIVE_CONFIG)" --workspace-key "$(WORKSPACE_KEY)"
+	$(EFFECTIVE_SCRIPT) makefile --config "$(EFFECTIVE_CONFIG)"
 
 
 start-ros2-foxglove-bridge:

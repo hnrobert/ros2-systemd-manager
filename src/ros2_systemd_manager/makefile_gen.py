@@ -89,7 +89,6 @@ def _migrate_legacy_auto_generated_makefile(base_dir: Path, target_fragment_path
 def build_makefile_content(
     *,
     script_default: str,
-    workspace_key: str,
     unit_names: List[str],
 ) -> str:
     """Build Makefile content for service lifecycle operations."""
@@ -224,13 +223,13 @@ upgrade:
 	$(EFFECTIVE_SCRIPT) upgrade
 
 install: ensure-config
-	$(SUDO) $(EFFECTIVE_SCRIPT) install --config \"$(EFFECTIVE_CONFIG)\" --workspace-key \"$(WORKSPACE_KEY)\"
+	$(SUDO) $(EFFECTIVE_SCRIPT) install --config \"$(EFFECTIVE_CONFIG)\"
 
 apply: ensure-config
-	$(SUDO) $(EFFECTIVE_SCRIPT) apply --config \"$(EFFECTIVE_CONFIG)\" --workspace-key \"$(WORKSPACE_KEY)\"
+	$(SUDO) $(EFFECTIVE_SCRIPT) apply --config \"$(EFFECTIVE_CONFIG)\"
 
 uninstall: ensure-config
-	$(SUDO) $(EFFECTIVE_SCRIPT) uninstall --config \"$(EFFECTIVE_CONFIG)\" --workspace-key \"$(WORKSPACE_KEY)\"
+	$(SUDO) $(EFFECTIVE_SCRIPT) uninstall --config \"$(EFFECTIVE_CONFIG)\"
 
 start:
 \t$(SUDO) systemctl start $(UNITS)
@@ -260,23 +259,25 @@ logs-recent:
 	$(SUDO) journalctl $(foreach u,$(UNITS),-u $(u)) -n 200 --no-pager
 
 update: ensure-config
-	$(SUDO) $(EFFECTIVE_SCRIPT) update --config \"$(EFFECTIVE_CONFIG)\" --workspace-key \"$(WORKSPACE_KEY)\" --previous-makefile \"$(GENERATED_MK)\"
+	$(SUDO) $(EFFECTIVE_SCRIPT) update --config \"$(EFFECTIVE_CONFIG)\"
 
 makefile: ensure-config
-	$(EFFECTIVE_SCRIPT) makefile --config \"$(EFFECTIVE_CONFIG)\" --workspace-key \"$(WORKSPACE_KEY)\"
+	$(EFFECTIVE_SCRIPT) makefile --config \"$(EFFECTIVE_CONFIG)\"
 
 {per_service_blocks_text}
 """
 
 
-def write_makefile(config: Dict[str, Any], config_path: Path, workspace_key: str) -> Path:
+def write_makefile(config: Dict[str, Any], config_path: Path) -> Path:
     """Generate (or overwrite) Makefile based on YAML workspace services."""
-    workspace_cfg = config["workspaces"][workspace_key]
-    services = workspace_cfg.get("services", [])
-    unit_names = [svc["unit_name"] for svc in services]
-
+    workspaces = config.get("workspaces", {})
+    unit_names = []
+    for ws_cfg in workspaces.values():
+        for svc in ws_cfg.get("services", []):
+            unit_names.append(svc["unit_name"])
+            
     if not unit_names:
-        err(f"workspace {workspace_key} has an empty services list; cannot build Makefile units.")
+        err("No services found in any workspace; cannot build Makefile units.")
         sys.exit(1)
 
     output_path = resolve_makefile_path(config, config_path)
@@ -291,7 +292,6 @@ def write_makefile(config: Dict[str, Any], config_path: Path, workspace_key: str
     script_default = script_default_raw or "ros2-systemd-manager"
     content = build_makefile_content(
         script_default=script_default,
-        workspace_key=workspace_key,
         unit_names=unit_names,
     )
 

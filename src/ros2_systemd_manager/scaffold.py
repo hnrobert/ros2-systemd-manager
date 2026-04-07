@@ -36,10 +36,8 @@ def _replace_first_yaml_line_value(template_text: str, key: str, value: str) -> 
     return re.sub(pattern, rf"\1{value}", template_text, count=1, flags=re.MULTILINE)
 
 
-def init_defaults(config_path: Path, workspace_key: str, force: bool = False) -> None:
+def init_defaults(config_path: Path, force: bool = False) -> None:
     """Create default YAML + Makefile bootstrap files for packaged CLI usage."""
-    del workspace_key  # kept for CLI compatibility; template key is preserved.
-
     config_path = config_path.resolve()
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -92,5 +90,5 @@ def init_defaults(config_path: Path, workspace_key: str, force: bool = False) ->
     config_path.write_text(yaml_text, encoding="utf-8")
     log(f"Default config generated: {config_path}")
 
-    write_makefile(config, config_path, existing_workspace_key)
+    write_makefile(config, config_path)
     log("Default Makefile generated.")

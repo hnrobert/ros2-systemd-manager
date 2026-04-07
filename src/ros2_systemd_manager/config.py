@@ -100,17 +100,17 @@ def resolve_action(cli_action: Optional[str], config: Dict[str, Any]) -> str:
     return action
 
 
-def resolve_workspace_key(cli_workspace_key: Optional[str], config: Dict[str, Any]) -> str:
-    """Resolve workspace key from CLI or default to first workspace."""
-    workspaces: Dict[str, Any] = config["workspaces"]
+def resolve_workspace_keys(cli_workspace_key: Optional[str], config: Dict[str, Any]) -> list[str]:
+    """Resolve workspace keys from CLI or default to all workspaces."""
+    workspaces: Dict[str, Any] = config.get("workspaces", {})
 
     if cli_workspace_key:
         if cli_workspace_key not in workspaces:
             err(f"workspace_key not found: {cli_workspace_key}")
             sys.exit(1)
-        return cli_workspace_key
+        return [cli_workspace_key]
 
-    return next(iter(workspaces.keys()))
+    return list(workspaces.keys())
 
 
 def resolve_makefile_path(config: Dict[str, Any], config_path: Path) -> Path:
