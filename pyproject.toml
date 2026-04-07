@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ros2-systemd-manager"
-version = "0.1.2"
+version = "0.1.3"
 description = "YAML-driven ROS2 systemd service manager"
 readme = "README.md"
 requires-python = ">=3.9"
