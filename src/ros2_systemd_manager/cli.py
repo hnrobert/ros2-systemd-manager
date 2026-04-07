@@ -1,4 +1,5 @@
 import argparse
+import importlib.metadata
 import os
 import subprocess
 import sys
@@ -23,31 +24,69 @@ def _default_config_path() -> str:
     return str(package_candidate)
 
 
+def _get_version() -> str:
+    try:
+        return importlib.metadata.version("ros2-systemd-manager")
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+
+
 def parse_args() -> argparse.Namespace:
+    description = (
+        "==========================================================\n"
+        "   ROS2 Systemd Manager - Declarative Service Management\n"
+        "==========================================================\n\n"
+        "Automate the deployment, tracking, and management of systemd\n"
+        "services for ROS 2 workspaces using a single YAML file."
+    )
+    epilog = (
+        "SUPPORTED ACTIONS:\n"
+        "  init           Create a default YAML template and Makefile\n"
+        "  install        Install unit files but do not start them\n"
+        "  apply          Install, start, and enable unit files on boot\n"
+        "  update         Sync systemd with YAML (stops old/removed, updates tracked hashes)\n"
+        "  uninstall      Stop, disable, and securely remove unit files\n"
+        "  makefile       Regenerate the local Makefile helper only\n"
+        "  upgrade        Self-upgrade this CLI tool remotely via pip\n\n"
+        "EXAMPLES:\n"
+        "  ros2-systemd-manager init --force\n"
+        "  sudo ros2-systemd-manager apply --config ./ros2_services.yaml\n"
+        "  sudo ros2-systemd-manager uninstall"
+    )
+
     parser = argparse.ArgumentParser(
-        description="ROS2 systemd service manager (YAML-driven).")
+        prog="ros2-systemd-manager",
+        description=description,
+        epilog=epilog,
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+
+    parser.add_argument(
+        "-v", "--version",
+        action="version",
+        version=f"%(prog)s {_get_version()}",
+        help="Show program's version number and exit.",
+    )
+
     parser.add_argument(
         "action",
         nargs="?",
-        help=(
-            "Optional: init | upgrade | install | apply | uninstall | update | makefile; "
-            "defaults to YAML action"
-        ),
+        help="Action to perform (default: specified in YAML actions.default_action)",
     )
     parser.add_argument(
-        "--config",
+        "-c", "--config",
         default=None,
-        help="YAML config file path",
+        help="Path to YAML config file (default: current dir or pkg default)",
     )
     parser.add_argument(
-        "--workspace-key",
+        "-w", "--workspace-key",
         default=None,
-        help="Workspace key to operate on (default: first key in workspaces)",
+        help="Workspace key to operate on (default: all workspaces defined)",
     )
     parser.add_argument(
-        "--force",
+        "-f", "--force",
         action="store_true",
-        help="Overwrite files when used with init",
+        help="Force overwrite when executing the 'init' action",
     )
     return parser.parse_args()
 
@@ -102,7 +141,7 @@ def run() -> None:
     elif action == "uninstall":
         uninstall(config, workspace_keys)
     elif action == "update":
-        
+
         sync_update(config, workspace_keys)
     elif action == "upgrade":
         _upgrade_self()

@@ -22,7 +22,7 @@ sudo pip install ros2-systemd-manager
 
 ## CLI
 
-`ros2-systemd-manager [action] [--config PATH] [--workspace-key KEY]`
+`ros2-systemd-manager [-v] [-c CONFIG] [-w WORKSPACE_KEY] [-f] [action]`
 
 Supported actions:
 

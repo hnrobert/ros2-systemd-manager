@@ -3,3 +3,10 @@ __pycache__/
 
 ros2_services.yaml
 *.egg-info
+build/
+dist/
+*.egg
+*.log
+*.bak
+*.swp
+*.tmp
