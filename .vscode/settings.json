@@ -3,6 +3,7 @@
         "autoaim",
         "behavior",
         "bringup",
+        "filecmp",
         "firstword",
         "geteuid",
         "journalctl",

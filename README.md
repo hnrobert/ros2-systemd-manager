@@ -36,7 +36,7 @@ Supported actions:
 
 ## Init Output
 
-Run in an empty directory:
+Run in your desired config directory (e.g., ROS2 workspace root) to generate the default YAML config and Makefile targets:
 
 ```bash
 ros2-systemd-manager init
@@ -63,7 +63,65 @@ Optional:
 - `actions` (default action is `apply`)
 - `makefile`
 
+## Example YAML Configuration
+
+Below is a sample `ros2_services.yaml` demonstrating common fields and layout.
+
+```yaml
+systemd:
+  unit_dir: /etc/systemd/system
+  wanted_by: multi-user.target
+
+runtime:
+  user: user
+  group: user
+  home: /home/user
+  shell: /bin/bash
+  restart: on-failure
+  restart_sec: 3
+
+workspaces:
+  default_ws: # Workspace key, selectable via --workspace-key
+    path: /home/user/default_ws
+    setup_script: install/setup.bash
+    services:
+      - unit_name: ros2-foxglove-bridge.service
+        description: ROS2 Foxglove Bridge
+        use_root: false # Optional: default false. When true, force this service to run as root.
+        launch_command: ros2 launch foxglove_bridge foxglove_bridge_launch.xml
+
+      - unit_name: ros2-soem-bringup.service
+        description: ROS2 Simple Open EtherCAT Master Bringup (https://github.com/AIMEtherCAT/EcatV2_Master)
+        use_root: false
+        service_options: # Example of granting specific capabilities to a service without running as root
+          - CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+          - AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+        launch_command: ros2 launch soem_bringup bringup.launch.py
+
+      - unit_name: ros2-infantry-chassis.service
+        description: ROS2 Infantry Chassis Controller
+        depends_on:
+          - ros2-soem-bringup.service
+        launch_command: ros2 launch infantry_controller infantry_chassis.launch.py
+
+      - unit_name: ros2-sp-vision-autoaim.service
+        description: TongjiSuperPower/sp_vision_25 Auto Aim (via self defined sp_vision_launch)
+        service_options:
+          - CPUAffinity=1 2 3 # Example of setting CPU affinity for a service
+        launch_command: ros2 launch sp_vision_launch sp_vision.launch.py config:=sentry.yaml
+```
+
+This example shows how to define:
+
+- `systemd` settings for unit placement and installation behavior
+- `runtime` defaults shared by all services
+- one or more `workspaces`, each with its own `services` list
+- `depends_on` relationships between services
+- optional `service_options` for extra systemd directives
+
 ## Generated Makefile
+
+> **Note:** The generated Makefile targets are designed to be intuitive and cover common systemd management tasks. You can customize the generated targets by modifying the `workspaces` section in your YAML config.
 
 Primary targets:
 
@@ -94,7 +152,11 @@ Config behavior:
 - Override manually via `CONFIG` environment variable or `--config` parameter:
 
 ```bash
+# Using Makefile with custom config
 make apply CONFIG=./my_services.yaml
+
+# or
+ros2-systemd-manager apply --config ./my_services.yaml
 ```
 
 ## File Tracking & Safety
