@@ -172,4 +172,6 @@ ros2-systemd-manager apply --config ./my_services.yaml
 
 ## Contributing
 
+Licensed under the Apache License 2.0. See [LICENSE](./LICENSE) for details.
+
 Contributions are welcome! Please open issues or submit pull requests for bug fixes, improvements, or new features.
