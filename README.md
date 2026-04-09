@@ -169,3 +169,7 @@ ros2-systemd-manager apply --config ./my_services.yaml
 - Use trusted launch commands only.
 - Validate workspace paths and setup scripts before `apply` or `update`.
 - Prefer `install` first for new services.
+
+## Contributing
+
+Contributions are welcome! Please open issues or submit pull requests for bug fixes, improvements, or new features.
