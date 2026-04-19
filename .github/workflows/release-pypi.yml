@@ -67,6 +67,22 @@ jobs:
             git push origin HEAD:main
           fi
 
+      - name: Sync develop branch with main
+        run: |
+          git fetch origin develop
+          if git show-ref --verify --quiet refs/remotes/origin/develop; then
+            git checkout develop
+            if git merge --ff-only origin/main; then
+              git push origin develop
+              echo "develop branch synced with main"
+            else
+              echo "Fast-forward merge failed — develop has diverged from main, manual intervention required"
+              exit 1
+            fi
+          else
+            echo "develop branch does not exist, skipping sync"
+          fi
+
       - name: Create tag
         if: ${{ github.event.inputs.tag }}
         run: |

@@ -29,12 +29,12 @@ def get_help_text() -> str:
 def load_yaml_config(config_path: Path) -> Dict[str, Any]:
     """Load and parse YAML configuration."""
     if not config_path.exists():
-        err(f"Configuration file does not exist: {config_path}")
-        err("")
-        err("To get started, run the following command in your workspace directory:")
-        err("  ros2-systemd-manager init")
-        err("")
-        err("This will create a default ros2_services.yaml config and makefiles.")
+        err("Configuration file (ros2_services.yaml) does not found in current directory.")
+        print("")
+        print("To get started, run the following command in your workspace directory:")
+        print("  ros2-systemd-manager init")
+        print("")
+        print("This will create a default ros2_services.yaml config and makefiles.")
         sys.exit(1)
 
     with config_path.open("r", encoding="utf-8") as f:
@@ -115,8 +115,8 @@ def resolve_action(cli_action: Optional[str], config: Dict[str, Any]) -> str:
 
     if action not in SUPPORTED_ACTIONS:
         err(f"Unsupported action: {action}")
-        err(f"Allowed actions: {', '.join(sorted(SUPPORTED_ACTIONS))}")
-        err("")
+        print(f"Allowed actions: {', '.join(sorted(SUPPORTED_ACTIONS))}")
+        print("")
         print(get_help_text())
         sys.exit(1)
 
@@ -130,8 +130,8 @@ def resolve_workspace_keys(cli_workspace_key: Optional[str], config: Dict[str, A
     if cli_workspace_key:
         if cli_workspace_key not in workspaces:
             err(f"Workspace key not found: {cli_workspace_key}")
-            err(f"Available workspace keys: {', '.join(workspaces.keys())}")
-            err("")
+            print(f"Available workspace keys: {', '.join(workspaces.keys())}")
+            print("")
             print(get_help_text())
             sys.exit(1)
         return [cli_workspace_key]

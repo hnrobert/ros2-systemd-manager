@@ -115,9 +115,9 @@ def run() -> None:
 
     if action_arg is None:
         err("No action specified.")
-        err("")
-        err("To get started, run 'ros2-systemd-manager init' in your workspace directory.")
-        err("")
+        print("")
+        print("To get started, run 'ros2-systemd-manager init' in your workspace directory.")
+        print("")
         print(get_help_text())
         sys.exit(1)
 
@@ -169,12 +169,12 @@ def entrypoint() -> int:
         run()
     except subprocess.CalledProcessError as exc:
         err(f"Command failed: {' '.join(exc.cmd)} (exit={exc.returncode})")
-        err("")
+        print("")
         print(get_help_text())
         return exc.returncode
     except KeyError as exc:
         err(f"Missing configuration field: {exc}")
-        err("")
+        print("")
         print(get_help_text())
         return 1
     return 0
