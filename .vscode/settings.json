@@ -9,7 +9,13 @@
         "journalctl",
         "keepends",
         "lastword",
+        "ncipollo",
+        "pipefail",
         "pycache",
+        "pypa",
+        "pypi",
+        "pyproject",
+        "sdist",
         "setuptools",
         "soem",
         "tofile"

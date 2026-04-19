@@ -5,8 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .config import (load_yaml_config, resolve_action, resolve_workspace_keys,
-                     validate_config)
+from .config import (get_help_text, load_yaml_config, resolve_action,
+                     resolve_workspace_keys, validate_config)
 from .makefile_gen import write_makefile
 from .runtime import err, log, require_root
 from .scaffold import init_defaults
@@ -30,15 +30,9 @@ def _get_version() -> str:
         return "unknown"
 
 
-def parse_args() -> argparse.Namespace:
-    description = (
-        "===========================================================\n"
-        "   ROS2 Systemd Manager - Declarative Service Management\n"
-        "===========================================================\n\n"
-        "Automate the deployment, tracking, and management of systemd\n"
-        "services for ROS 2 workspaces using a single YAML file."
-    )
-    epilog = (
+def get_help_text() -> str:
+    """Return the help text for the CLI."""
+    return (
         "SUPPORTED ACTIONS:\n"
         "  init           Create a default YAML template and Makefile\n"
         "  install        Install unit files but do not start them\n"
@@ -52,6 +46,17 @@ def parse_args() -> argparse.Namespace:
         "  sudo ros2-systemd-manager apply --config ./ros2_services.yaml\n"
         "  sudo ros2-systemd-manager uninstall"
     )
+
+
+def parse_args() -> argparse.Namespace:
+    description = (
+        "===========================================================\n"
+        "   ROS2 Systemd Manager - Declarative Service Management\n"
+        "===========================================================\n\n"
+        "Automate the deployment, tracking, and management of systemd\n"
+        "services for ROS 2 workspaces using a single YAML file."
+    )
+    epilog = get_help_text()
 
     parser = argparse.ArgumentParser(
         prog="ros2-systemd-manager",
@@ -108,6 +113,14 @@ def run() -> None:
     args = parse_args()
     action_arg = args.action
 
+    if action_arg is None:
+        err("No action specified.")
+        err("")
+        err("To get started, run 'ros2-systemd-manager init' in your workspace directory.")
+        err("")
+        print(get_help_text())
+        sys.exit(1)
+
     if action_arg == "init":
         target_config = Path(args.config) if args.config else (
             Path.cwd() / "ros2_services.yaml")
@@ -156,9 +169,13 @@ def entrypoint() -> int:
         run()
     except subprocess.CalledProcessError as exc:
         err(f"Command failed: {' '.join(exc.cmd)} (exit={exc.returncode})")
+        err("")
+        print(get_help_text())
         return exc.returncode
     except KeyError as exc:
         err(f"Missing configuration field: {exc}")
+        err("")
+        print(get_help_text())
         return 1
     return 0
 

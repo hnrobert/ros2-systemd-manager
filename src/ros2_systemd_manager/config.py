@@ -8,10 +8,33 @@ from .actions import SUPPORTED_ACTIONS
 from .runtime import err
 
 
+def get_help_text() -> str:
+    """Return the help text for the CLI."""
+    return (
+        "SUPPORTED ACTIONS:\n"
+        "  init           Create a default YAML template and Makefile\n"
+        "  install        Install unit files but do not start them\n"
+        "  apply          Install, start, and enable unit files on boot\n"
+        "  update         Sync systemd with YAML (stops old/removed, updates tracked hashes)\n"
+        "  uninstall      Stop, disable, and securely remove unit files\n"
+        "  makefile       Regenerate the local Makefile helper only\n"
+        "  upgrade        Self-upgrade this CLI tool remotely via pip\n\n"
+        "EXAMPLES:\n"
+        "  ros2-systemd-manager init --force\n"
+        "  sudo ros2-systemd-manager apply --config ./ros2_services.yaml\n"
+        "  sudo ros2-systemd-manager uninstall"
+    )
+
+
 def load_yaml_config(config_path: Path) -> Dict[str, Any]:
     """Load and parse YAML configuration."""
     if not config_path.exists():
         err(f"Configuration file does not exist: {config_path}")
+        err("")
+        err("To get started, run the following command in your workspace directory:")
+        err("  ros2-systemd-manager init")
+        err("")
+        err("This will create a default ros2_services.yaml config and makefiles.")
         sys.exit(1)
 
     with config_path.open("r", encoding="utf-8") as f:
@@ -91,10 +114,10 @@ def resolve_action(cli_action: Optional[str], config: Dict[str, Any]) -> str:
     action = cli_action or default_action
 
     if action not in SUPPORTED_ACTIONS:
-        err(
-            f"Unsupported action: {action}. "
-            f"Allowed: {sorted(SUPPORTED_ACTIONS)}"
-        )
+        err(f"Unsupported action: {action}")
+        err(f"Allowed actions: {', '.join(sorted(SUPPORTED_ACTIONS))}")
+        err("")
+        print(get_help_text())
         sys.exit(1)
 
     return action
@@ -106,7 +129,10 @@ def resolve_workspace_keys(cli_workspace_key: Optional[str], config: Dict[str, A
 
     if cli_workspace_key:
         if cli_workspace_key not in workspaces:
-            err(f"workspace_key not found: {cli_workspace_key}")
+            err(f"Workspace key not found: {cli_workspace_key}")
+            err(f"Available workspace keys: {', '.join(workspaces.keys())}")
+            err("")
+            print(get_help_text())
             sys.exit(1)
         return [cli_workspace_key]
 

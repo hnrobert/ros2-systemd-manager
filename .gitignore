@@ -10,3 +10,5 @@ dist/
 *.bak
 *.swp
 *.tmp
+
+settings.local.json
