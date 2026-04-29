@@ -2,7 +2,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .runtime import err, log, run_cmd
 from .version_control import (check_and_prompt_for_modifications,
@@ -11,8 +11,8 @@ from .version_control import (check_and_prompt_for_modifications,
 
 def _resolve_setup_scripts(
     workspace_path: Path,
-    setup_script_rel: str | None,
-    setup_scripts: List[str] | None,
+    setup_script_rel: Optional[str],
+    setup_scripts: Optional[List[str]],
 ) -> List[Path]:
     """Resolve setup script paths, returning absolute paths in source order."""
     if setup_scripts:
@@ -32,15 +32,15 @@ def build_unit_content(
     *,
     description: str,
     workspace_path: Path,
-    setup_script_rel: str | None,
-    setup_scripts: List[str] | None,
+    setup_script_rel: Optional[str],
+    setup_scripts: Optional[List[str]],
     launch_command: str,
     depends_on: List[str],
     service_options: List[str],
     use_root: bool,
     runtime: Dict[str, Any],
     wanted_by: str,
-    ros_domain_id: int | None = None,
+    ros_domain_id: Optional[int] = None,
 ) -> str:
     """Build systemd unit file content for one service."""
     shell = runtime.get("shell", "/bin/bash")
@@ -89,8 +89,8 @@ WantedBy={wanted_by}
 
 def validate_workspace_for_install(
     workspace_path: Path,
-    setup_script_rel: str | None,
-    setup_scripts: List[str] | None,
+    setup_script_rel: Optional[str],
+    setup_scripts: Optional[List[str]],
 ) -> None:
     """Validate workspace path and setup scripts before install actions."""
     if not workspace_path.is_dir():
@@ -104,7 +104,7 @@ def validate_workspace_for_install(
             sys.exit(1)
 
 
-def install_only(config: Dict[str, Any], workspace_keys: List[str]) -> tuple[list[str], list[str]]:
+def install_only(config: Dict[str, Any], workspace_keys: List[str]) -> tuple:
     """Install unit files only, without starting or enabling them.
 
     Returns (all_unit_names, enabled_unit_names).

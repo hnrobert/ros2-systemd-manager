@@ -9,6 +9,7 @@ import yaml
 
 from .makefile_gen import write_makefile
 from .runtime import err, log
+from .domain import detect_domain_id
 
 
 def _load_example_template_text() -> str:
@@ -86,6 +87,22 @@ def init_defaults(config_path: Path, force: bool = False) -> None:
         raise SystemExit(1)
 
     existing_workspace_key = next(iter(workspaces.keys()))
+
+    # Auto-detect ROS_DOMAIN_ID from shell rc/profile files
+    detected_domain = detect_domain_id()
+    if detected_domain is not None:
+        ws_block_match = re.search(
+            rf"(^(\s+){re.escape(existing_workspace_key)}:\s*\n(?:(?:\2\s+).*\n)*)",
+            yaml_text,
+            re.MULTILINE,
+        )
+        if ws_block_match:
+            indent = ws_block_match.group(2) + "  "
+            insert_pos = ws_block_match.end()
+            domain_line = f"{indent}ros_domain_id: {detected_domain}\n"
+            yaml_text = yaml_text[:insert_pos] + domain_line + yaml_text[insert_pos:]
+            log(f"Auto-detected ROS_DOMAIN_ID={detected_domain} from shell config.")
+        config = yaml.safe_load(yaml_text)
 
     config_path.write_text(yaml_text, encoding="utf-8")
     log(f"Default config generated: {config_path}")

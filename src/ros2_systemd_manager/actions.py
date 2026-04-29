@@ -6,4 +6,5 @@ SUPPORTED_ACTIONS = {
     "uninstall",
     "update",
     "makefile",
+    "set-domain-id",
 }

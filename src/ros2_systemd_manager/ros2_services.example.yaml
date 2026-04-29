@@ -11,6 +11,7 @@
 # 6) services can set enable: false to start without auto-start on boot (default: true)
 # 7) workspaces can set ros_domain_id to isolate DDS traffic per workspace
 # 8) workspaces can use setup_scripts (list) instead of setup_script for multi-source
+# 9) use 'sudo ros2-systemd-manager set-domain-id <N>' to set ROS_DOMAIN_ID in all shell rc/profile files
 #
 # Supported actions:
 # - upgrade                Self-upgrade this tool via pip install --upgrade
