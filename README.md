@@ -84,10 +84,12 @@ workspaces:
   default_ws: # Workspace key, selectable via --workspace-key
     path: /home/user/default_ws
     setup_script: install/setup.bash
+    # ros_domain_id: 0 # Optional: set ROS_DOMAIN_ID to isolate DDS traffic per workspace
     services:
       - unit_name: ros2-foxglove-bridge.service
         description: ROS2 Foxglove Bridge
         use_root: false # Optional: default false. When true, force this service to run as root.
+        enable: true # Optional: default true. Set false to start without auto-start on boot.
         launch_command: ros2 launch foxglove_bridge foxglove_bridge_launch.xml
 
       - unit_name: ros2-soem-bringup.service
@@ -106,9 +108,22 @@ workspaces:
 
       - unit_name: ros2-sp-vision-autoaim.service
         description: TongjiSuperPower/sp_vision_25 Auto Aim (via self defined sp_vision_launch)
+        enable: false # Example: start on demand, do not auto-start on boot
         service_options:
           - CPUAffinity=1 2 3 # Example of setting CPU affinity for a service
         launch_command: ros2 launch sp_vision_launch sp_vision.launch.py config:=sentry.yaml
+
+  # Multi-source example with domain isolation:
+  # another_ws:
+  #   path: /home/user/another_ws
+  #   ros_domain_id: 42
+  #   setup_scripts:
+  #     - /opt/ros/humble/setup.bash
+  #     - install/setup.bash
+  #   services:
+  #     - unit_name: ros2-another.service
+  #       description: Another workspace service
+  #       launch_command: ros2 run pkg node
 ```
 
 This example shows how to define:
@@ -118,6 +133,9 @@ This example shows how to define:
 - one or more `workspaces`, each with its own `services` list
 - `depends_on` relationships between services
 - optional `service_options` for extra systemd directives
+- optional `enable: false` to start a service without enabling it on boot
+- optional `ros_domain_id` to isolate DDS traffic per workspace
+- optional `setup_scripts` (list) to source multiple scripts before launching
 
 ## Generated Makefile
 

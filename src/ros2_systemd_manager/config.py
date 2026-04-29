@@ -80,6 +80,20 @@ def validate_config(config: Dict[str, Any]) -> None:
             err(f"workspace '{workspace_key}' must be a mapping.")
             sys.exit(1)
 
+        setup_scripts = workspace_cfg.get("setup_scripts")
+        if setup_scripts is not None:
+            if not isinstance(setup_scripts, list) or not all(
+                isinstance(s, str) and s.strip() for s in setup_scripts
+            ):
+                err(f"workspace '{workspace_key}' setup_scripts must be a list of non-empty strings.")
+                sys.exit(1)
+
+        ros_domain_id = workspace_cfg.get("ros_domain_id")
+        if ros_domain_id is not None:
+            if not isinstance(ros_domain_id, int):
+                err(f"workspace '{workspace_key}' ros_domain_id must be an integer.")
+                sys.exit(1)
+
         services = workspace_cfg.get("services", [])
         if not isinstance(services, list):
             err(f"workspace '{workspace_key}' services must be a list.")
@@ -93,6 +107,11 @@ def validate_config(config: Dict[str, Any]) -> None:
             if "use_root" in svc and not isinstance(svc["use_root"], bool):
                 unit_name = svc.get("unit_name", "<unknown>")
                 err(f"Service {unit_name} has invalid use_root: expected true/false.")
+                sys.exit(1)
+
+            if "enable" in svc and not isinstance(svc["enable"], bool):
+                unit_name = svc.get("unit_name", "<unknown>")
+                err(f"Service {unit_name} has invalid enable: expected true/false.")
                 sys.exit(1)
 
             service_options = svc.get("service_options")

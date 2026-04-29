@@ -9,17 +9,38 @@ from .version_control import (check_and_prompt_for_modifications,
                               record_uninstall, record_update)
 
 
+def _resolve_setup_scripts(
+    workspace_path: Path,
+    setup_script_rel: str | None,
+    setup_scripts: List[str] | None,
+) -> List[Path]:
+    """Resolve setup script paths, returning absolute paths in source order."""
+    if setup_scripts:
+        resolved = []
+        for s in setup_scripts:
+            p = Path(s)
+            if not p.is_absolute():
+                p = workspace_path / p
+            resolved.append(p)
+        return resolved
+    if setup_script_rel:
+        return [workspace_path / setup_script_rel]
+    return []
+
+
 def build_unit_content(
     *,
     description: str,
     workspace_path: Path,
-    setup_script_rel: str,
+    setup_script_rel: str | None,
+    setup_scripts: List[str] | None,
     launch_command: str,
     depends_on: List[str],
     service_options: List[str],
     use_root: bool,
     runtime: Dict[str, Any],
     wanted_by: str,
+    ros_domain_id: int | None = None,
 ) -> str:
     """Build systemd unit file content for one service."""
     shell = runtime.get("shell", "/bin/bash")
@@ -35,12 +56,16 @@ def build_unit_content(
     restart = runtime.get("restart", "on-failure")
     restart_sec = runtime.get("restart_sec", 3)
 
-    setup_script_abs = workspace_path / setup_script_rel
+    scripts = _resolve_setup_scripts(workspace_path, setup_script_rel, setup_scripts)
+    source_chain = " && ".join(f'source "{s}"' for s in scripts)
+    exec_prefix = f"{source_chain} && " if source_chain else ""
+
     after_targets = ["network-online.target", *depends_on]
     after_line = " ".join(after_targets)
     requires_line = f"Requires={' '.join(depends_on)}\n" if depends_on else ""
     service_options_lines = "\n".join(service_options)
     service_options_block = f"{service_options_lines}\n" if service_options_lines else ""
+    domain_env = f"Environment=ROS_DOMAIN_ID={ros_domain_id}\n" if ros_domain_id is not None else ""
 
     return f"""[Unit]
 Description={description}
@@ -53,7 +78,7 @@ User={user}
 Group={group}
 WorkingDirectory={workspace_path}
 Environment=HOME={home}
-ExecStart={shell} -lc 'source "{setup_script_abs}" && exec {launch_command}'
+{domain_env}ExecStart={shell} -lc '{exec_prefix}exec {launch_command}'
 {service_options_block}Restart={restart}
 RestartSec={restart_sec}
 
@@ -62,24 +87,33 @@ WantedBy={wanted_by}
 """
 
 
-def validate_workspace_for_install(workspace_path: Path, setup_script_rel: str) -> None:
-    """Validate workspace path and setup script before install actions."""
+def validate_workspace_for_install(
+    workspace_path: Path,
+    setup_script_rel: str | None,
+    setup_scripts: List[str] | None,
+) -> None:
+    """Validate workspace path and setup scripts before install actions."""
     if not workspace_path.is_dir():
         err(f"Workspace path does not exist: {workspace_path}")
         sys.exit(1)
 
-    setup_script_abs = workspace_path / setup_script_rel
-    if not setup_script_abs.is_file():
-        err(f"Setup script not found: {setup_script_abs}")
-        sys.exit(1)
+    scripts = _resolve_setup_scripts(workspace_path, setup_script_rel, setup_scripts)
+    for s in scripts:
+        if not s.is_file():
+            err(f"Setup script not found: {s}")
+            sys.exit(1)
 
 
-def install_only(config: Dict[str, Any], workspace_keys: List[str]) -> List[str]:
-    """Install unit files only, without starting or enabling them."""
+def install_only(config: Dict[str, Any], workspace_keys: List[str]) -> tuple[list[str], list[str]]:
+    """Install unit files only, without starting or enabling them.
+
+    Returns (all_unit_names, enabled_unit_names).
+    """
     systemd_cfg = config["systemd"]
     runtime_cfg = config["runtime"]
     unit_names: List[str] = []
-    
+    enabled_unit_names: List[str] = []
+
     unit_dir = Path(systemd_cfg.get("unit_dir", "/etc/systemd/system"))
     wanted_by = systemd_cfg.get("wanted_by", "multi-user.target")
 
@@ -88,14 +122,16 @@ def install_only(config: Dict[str, Any], workspace_keys: List[str]) -> List[str]
     for ws_key in workspace_keys:
         workspace_cfg = config["workspaces"][ws_key]
         workspace_path = Path(workspace_cfg["path"])
-        setup_script_rel = workspace_cfg.get("setup_script", "install/setup.bash")
+        setup_script_rel = workspace_cfg.get("setup_script")
+        setup_scripts = workspace_cfg.get("setup_scripts")
+        ros_domain_id = workspace_cfg.get("ros_domain_id")
         services = workspace_cfg.get("services", [])
 
         if not services:
             log(f"Workspace {ws_key} has no services.")
             continue
 
-        validate_workspace_for_install(workspace_path, setup_script_rel)
+        validate_workspace_for_install(workspace_path, setup_script_rel, setup_scripts)
         defined_unit_names = {svc["unit_name"] for svc in services}
 
         for svc in services:
@@ -105,6 +141,7 @@ def install_only(config: Dict[str, Any], workspace_keys: List[str]) -> List[str]
             depends_on = svc.get("depends_on", [])
             service_options = svc.get("service_options", [])
             use_root = bool(svc.get("use_root", False))
+            enable = bool(svc.get("enable", True))
 
             if not isinstance(depends_on, list):
                 err(f"Service {unit_name} has invalid depends_on: expected a list.")
@@ -125,12 +162,14 @@ def install_only(config: Dict[str, Any], workspace_keys: List[str]) -> List[str]
                 description=description,
                 workspace_path=workspace_path,
                 setup_script_rel=setup_script_rel,
+                setup_scripts=setup_scripts,
                 launch_command=launch_command,
                 depends_on=depends_on,
                 service_options=service_options,
                 use_root=use_root,
                 runtime=runtime_cfg,
                 wanted_by=wanted_by,
+                ros_domain_id=ros_domain_id,
             )
 
             unit_file = unit_dir / unit_name
@@ -145,20 +184,33 @@ def install_only(config: Dict[str, Any], workspace_keys: List[str]) -> List[str]
             record_update(unit_name, unit_content)
 
             unit_names.append(unit_name)
-            log(f"Written: {unit_file}")
+            if enable:
+                enabled_unit_names.append(unit_name)
+            log(f"Written: {unit_file} (enable={enable})")
 
     run_cmd(["systemctl", "daemon-reload"])
     log("systemd daemon-reload completed.")
     log("Install finished (not started, not enabled).")
-    return unit_names
+    return unit_names, enabled_unit_names
 
 
 def install_start_enable(config: Dict[str, Any], workspace_keys: List[str]) -> None:
-    """Install services, then start and enable them immediately."""
-    unit_names = install_only(config, workspace_keys)
-    log("Enabling and starting services...")
-    run_cmd(["systemctl", "enable", "--now", *unit_names])
-    log("Completed: services are started and enabled on boot.")
+    """Install services, then start and enable them (respecting per-service enable flag)."""
+    unit_names, enabled_unit_names = install_only(config, workspace_keys)
+
+    not_enabled = [u for u in unit_names if u not in enabled_unit_names]
+
+    if enabled_unit_names:
+        log("Enabling and starting services...")
+        run_cmd(["systemctl", "enable", "--now", *enabled_unit_names])
+
+    if not_enabled:
+        log(f"Starting without enable: {', '.join(not_enabled)}")
+        run_cmd(["systemctl", "start", *not_enabled])
+
+    log("Completed: services are started.")
+    if not_enabled:
+        log(f"Note: {', '.join(not_enabled)} will NOT auto-start on boot (enable=false).")
     log(f"Check status with: systemctl status {' '.join(unit_names)}")
 
 
