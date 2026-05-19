@@ -28,9 +28,9 @@ _DOMAIN_LINE_PATTERN = re.compile(
 def detect_domain_id() -> Optional[int]:
     """Scan known shell rc/profile files for an existing ROS_DOMAIN_ID setting."""
     for rc_file in _SHELL_RC_FILES:
-        if not rc_file.is_file():
-            continue
         try:
+            if not rc_file.is_file():
+                continue
             text = rc_file.read_text(encoding="utf-8", errors="ignore")
         except PermissionError:
             continue
@@ -49,9 +49,9 @@ def set_domain_id(domain_id: int) -> None:
     modified: List[str] = []
 
     for rc_file in _SHELL_RC_FILES:
-        if not rc_file.parent.is_dir():
-            continue
         try:
+            if not rc_file.parent.is_dir():
+                continue
             if rc_file.is_file():
                 text = rc_file.read_text(encoding="utf-8", errors="ignore")
             else:
