@@ -18,11 +18,16 @@ def get_help_text() -> str:
         "  uninstall           Stop, disable, and securely remove unit files\n"
         "  makefile            Regenerate the local Makefile helper only\n"
         "  upgrade             Self-upgrade this CLI tool remotely via pip\n"
-        "  set-domain-id <N>   Set ROS_DOMAIN_ID in all shell profile/rc files\n\n"
+        "  set [options]       Write ROS DDS env into all shell profile/rc files:\n"
+        "                      ROS_DOMAIN_ID / RMW_IMPLEMENTATION / ROS_LOCALHOST_ONLY\n"
+        "                        -d/--domain-id N          (default 0)\n"
+        "                        -r/--rmw cyclonedds|fastrtps (default cyclonedds)\n"
+        "                        -l/--localhost-only 0|1   (default 1)\n\n"
         "EXAMPLES:\n"
         "  ros2-systemd-manager init --force\n"
         "  sudo ros2-systemd-manager apply --config ./ros2_services.yaml\n"
-        "  sudo ros2-systemd-manager set-domain-id 42\n"
+        "  sudo ros2-systemd-manager set                       # domain=0, cyclonedds, localhost-only=1\n"
+        "  sudo ros2-systemd-manager set -d 42 -r fastrtps     # domain 42 + Fast DDS\n"
         "  sudo ros2-systemd-manager uninstall"
     )
 

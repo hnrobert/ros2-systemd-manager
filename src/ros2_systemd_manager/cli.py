@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .config import (get_help_text, load_yaml_config,
                      resolve_workspace_keys, validate_config)
-from .domain import set_domain_id
+from .domain import set_ros_env
 from .makefile_gen import write_makefile
 from .runtime import err, log, require_root
 from .scaffold import init_defaults
@@ -42,11 +42,16 @@ def get_help_text() -> str:
         "  uninstall           Stop, disable, and securely remove unit files\n"
         "  makefile            Regenerate the local Makefile helper only\n"
         "  upgrade             Self-upgrade this CLI tool remotely via pip\n"
-        "  set-domain-id <N>   Set ROS_DOMAIN_ID in all shell profile/rc files\n\n"
+        "  set [options]       Write ROS DDS env into all shell profile/rc files:\n"
+        "                      ROS_DOMAIN_ID / RMW_IMPLEMENTATION / ROS_LOCALHOST_ONLY\n"
+        "                        -d/--domain-id N          (default 0)\n"
+        "                        -r/--rmw cyclonedds|fastrtps (default cyclonedds)\n"
+        "                        -l/--localhost-only 0|1   (default 1)\n\n"
         "EXAMPLES:\n"
         "  ros2-systemd-manager init --force\n"
         "  sudo ros2-systemd-manager apply --config ./ros2_services.yaml\n"
-        "  sudo ros2-systemd-manager set-domain-id 42\n"
+        "  sudo ros2-systemd-manager set                       # domain=0, cyclonedds, localhost-only=1\n"
+        "  sudo ros2-systemd-manager set -d 42 -r fastrtps     # domain 42 + Fast DDS\n"
         "  sudo ros2-systemd-manager uninstall"
     )
 
@@ -81,9 +86,21 @@ def parse_args() -> argparse.Namespace:
         help="Action to perform (default: actions.default_action in YAML)",
     )
     parser.add_argument(
-        "domain_id",
-        nargs="?",
-        help="Domain ID for set-domain-id action",
+        "-d", "--domain-id",
+        type=int,
+        default=None,
+        help="ROS_DOMAIN_ID value for the 'set' action (default: 0).",
+    )
+    parser.add_argument(
+        "-r", "--rmw",
+        default=None,
+        help="RMW implementation for the 'set' action: cyclonedds|fastrtps (default: cyclonedds).",
+    )
+    parser.add_argument(
+        "-l", "--localhost-only",
+        type=int,
+        default=None,
+        help="ROS_LOCALHOST_ONLY value for the 'set' action: 0|1 (default: 1).",
     )
     parser.add_argument(
         "-c", "--config",
@@ -140,17 +157,19 @@ def run() -> None:
         _upgrade_self()
         return
 
-    if action_arg == "set-domain-id":
-        if not args.domain_id:
-            err("Usage: ros2-systemd-manager set-domain-id <number>")
-            sys.exit(1)
-        try:
-            domain = int(args.domain_id)
-        except ValueError:
-            err(f"Invalid domain ID: {args.domain_id} (must be an integer)")
-            sys.exit(1)
+    if action_arg == "set":
         require_root()
-        set_domain_id(domain)
+        domain = 0 if args.domain_id is None else args.domain_id
+        localhost = 1 if args.localhost_only is None else args.localhost_only
+        if localhost not in (0, 1):
+            err(f"Invalid --localhost-only: {localhost} (must be 0 or 1)")
+            sys.exit(1)
+        rmw = "cyclonedds" if args.rmw is None else args.rmw
+        try:
+            set_ros_env(domain_id=domain, rmw=rmw, localhost_only=localhost)
+        except ValueError as exc:
+            err(str(exc))
+            sys.exit(1)
         return
 
     # Actions that need a config file
