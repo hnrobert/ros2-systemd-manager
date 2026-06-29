@@ -3,9 +3,12 @@
         "autoaim",
         "behavior",
         "bringup",
+        "cyclonedds",
+        "fastrtps",
         "filecmp",
         "firstword",
         "geteuid",
+        "getpwnam",
         "journalctl",
         "keepends",
         "lastword",
@@ -18,7 +21,8 @@
         "sdist",
         "setuptools",
         "soem",
-        "tofile"
+        "tofile",
+        "vars"
     ],
     "python.analysis.extraPaths": [
         "./src"

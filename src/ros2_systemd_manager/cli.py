@@ -4,10 +4,11 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import List, Optional
 
 from .config import (get_help_text, load_yaml_config,
                      resolve_workspace_keys, validate_config)
-from .domain import set_domain_id
+from .domain import resolve_rmw, set_ros_env
 from .makefile_gen import write_makefile
 from .runtime import err, log, require_root
 from .scaffold import init_defaults
@@ -31,6 +32,27 @@ def _get_version() -> str:
         return "unknown"
 
 
+# Sentinel stored by argparse when -d/-r/-l is given without a value (bare flag).
+_BARE = object()
+
+# Default values applied when a `set` option is requested without a value.
+_SET_DEFAULTS = {"domain_id": 0, "rmw": "cyclonedds", "localhost_only": 1}
+
+
+def _confirm(prompt: str, default_yes: bool = False) -> bool:
+    """Yes/no confirmation prompt. Defaults to No unless default_yes is True."""
+    suffix = "[Y/n]" if default_yes else "[y/N]"
+    while True:
+        choice = input(f"{prompt} {suffix} ").strip().lower()
+        if choice == "":
+            return default_yes
+        if choice in ("y", "yes"):
+            return True
+        if choice in ("n", "no"):
+            return False
+        print("Please answer y or n.")
+
+
 def get_help_text() -> str:
     """Return the help text for the CLI."""
     return (
@@ -42,11 +64,19 @@ def get_help_text() -> str:
         "  uninstall           Stop, disable, and securely remove unit files\n"
         "  makefile            Regenerate the local Makefile helper only\n"
         "  upgrade             Self-upgrade this CLI tool remotely via pip\n"
-        "  set-domain-id <N>   Set ROS_DOMAIN_ID in all shell profile/rc files\n\n"
+        "  set [options]       Write ROS DDS env into shell profile/rc files (only keys you pass):\n"
+        "                      ROS_DOMAIN_ID / RMW_IMPLEMENTATION / ROS_LOCALHOST_ONLY\n"
+        "                        -d/--domain-id [N]             (default 0)\n"
+        "                        -r/--rmw [cyclonedds|fastrtps] (default cyclonedds)\n"
+        "                        -l/--localhost-only [0|1]      (default 1)\n"
+        "                      No options, or a bare flag (-d/-r/-l without a value), prompts for\n"
+        "                      confirmation before applying the default value(s).\n\n"
         "EXAMPLES:\n"
         "  ros2-systemd-manager init --force\n"
         "  sudo ros2-systemd-manager apply --config ./ros2_services.yaml\n"
-        "  sudo ros2-systemd-manager set-domain-id 42\n"
+        "  sudo ros2-systemd-manager set -d 42                 # write only ROS_DOMAIN_ID=42\n"
+        "  sudo ros2-systemd-manager set -d 42 -r fastrtps     # write domain 42 + Fast DDS only\n"
+        "  sudo ros2-systemd-manager set                       # confirm, then write all defaults\n"
         "  sudo ros2-systemd-manager uninstall"
     )
 
@@ -81,9 +111,19 @@ def parse_args() -> argparse.Namespace:
         help="Action to perform (default: actions.default_action in YAML)",
     )
     parser.add_argument(
-        "domain_id",
-        nargs="?",
-        help="Domain ID for set-domain-id action",
+        "-d", "--domain-id",
+        nargs="?", const=_BARE, type=int, default=None,
+        help="ROS_DOMAIN_ID for 'set' (default 0). Bare -d applies the default after confirmation.",
+    )
+    parser.add_argument(
+        "-r", "--rmw",
+        nargs="?", const=_BARE, default=None,
+        help="RMW for 'set': cyclonedds|fastrtps (default cyclonedds). Bare -r applies the default after confirmation.",
+    )
+    parser.add_argument(
+        "-l", "--localhost-only",
+        nargs="?", const=_BARE, type=int, default=None,
+        help="ROS_LOCALHOST_ONLY for 'set': 0|1 (default 1). Bare -l applies the default after confirmation.",
     )
     parser.add_argument(
         "-c", "--config",
@@ -117,6 +157,83 @@ def _upgrade_self() -> None:
     log("Upgrade completed.")
 
 
+def _run_set(args: argparse.Namespace) -> None:
+    """Implement the `set` action with partial application + confirmation.
+
+    Rules:
+      - No options at all        -> confirm before applying all three defaults.
+      - Any option present       -> write ONLY the requested keys.
+      - Bare flag (-d/-r/-l)     -> confirm before applying that key's default.
+    A flag with an explicit value is applied directly without confirmation.
+    """
+    domain_state = args.domain_id
+    rmw_state = args.rmw
+    localhost_state = args.localhost_only
+    none_specified = (
+        domain_state is None and rmw_state is None and localhost_state is None
+    )
+
+    # Final values to write; None means "leave this variable untouched".
+    domain: Optional[int] = None
+    rmw: Optional[str] = None
+    localhost: Optional[int] = None
+    confirm_items: List[tuple] = []  # (var_name, display_value) needing confirmation
+
+    if none_specified:
+        # Rule 1: confirm all defaults.
+        domain = _SET_DEFAULTS["domain_id"]
+        rmw = _SET_DEFAULTS["rmw"]
+        localhost = _SET_DEFAULTS["localhost_only"]
+        confirm_items = [
+            ("ROS_DOMAIN_ID", str(domain)),
+            ("RMW_IMPLEMENTATION", resolve_rmw(_SET_DEFAULTS["rmw"])),
+            ("ROS_LOCALHOST_ONLY", str(localhost)),
+        ]
+    else:
+        # Rule 2 & 3: only requested keys; bare flags need confirmation.
+        if domain_state is not None:
+            if domain_state is _BARE:
+                domain = _SET_DEFAULTS["domain_id"]
+                confirm_items.append(("ROS_DOMAIN_ID", str(domain)))
+            else:
+                domain = int(domain_state)
+        if rmw_state is not None:
+            if rmw_state is _BARE:
+                rmw = _SET_DEFAULTS["rmw"]
+                confirm_items.append(
+                    ("RMW_IMPLEMENTATION", resolve_rmw(_SET_DEFAULTS["rmw"])))
+            else:
+                rmw = rmw_state
+        if localhost_state is not None:
+            if localhost_state is _BARE:
+                localhost = _SET_DEFAULTS["localhost_only"]
+                confirm_items.append(("ROS_LOCALHOST_ONLY", str(localhost)))
+            else:
+                localhost = int(localhost_state)
+                if localhost not in (0, 1):
+                    err(f"Invalid --localhost-only: {localhost} (must be 0 or 1)")
+                    sys.exit(1)
+
+    if confirm_items:
+        header = (
+            "No options specified. The following defaults will be written:"
+            if none_specified
+            else "These options were given without a value; their defaults will be written:"
+        )
+        print(header)
+        for var, value in confirm_items:
+            print(f"  {var}={value}")
+        if not _confirm("Proceed?"):
+            log("Aborted: nothing was changed.")
+            return
+
+    try:
+        set_ros_env(domain_id=domain, rmw=rmw, localhost_only=localhost)
+    except ValueError as exc:
+        err(str(exc))
+        sys.exit(1)
+
+
 def run() -> None:
     args = parse_args()
     action_arg = args.action
@@ -140,17 +257,9 @@ def run() -> None:
         _upgrade_self()
         return
 
-    if action_arg == "set-domain-id":
-        if not args.domain_id:
-            err("Usage: ros2-systemd-manager set-domain-id <number>")
-            sys.exit(1)
-        try:
-            domain = int(args.domain_id)
-        except ValueError:
-            err(f"Invalid domain ID: {args.domain_id} (must be an integer)")
-            sys.exit(1)
+    if action_arg == "set":
         require_root()
-        set_domain_id(domain)
+        _run_set(args)
         return
 
     # Actions that need a config file
