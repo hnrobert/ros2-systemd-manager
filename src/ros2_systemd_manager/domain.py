@@ -154,19 +154,31 @@ def _update_rc_file(rc_file: Path, assignments: Dict[str, str]) -> str:
         return "skipped"
 
 
-def set_ros_env(*, domain_id: int, rmw: str, localhost_only: int) -> List[str]:
+def set_ros_env(
+    *,
+    domain_id: Optional[int] = None,
+    rmw: Optional[str] = None,
+    localhost_only: Optional[int] = None,
+) -> List[str]:
     """Write/update the ROS DDS environment in all shell rc/profile files.
 
-    Always writes all three variables: ROS_DOMAIN_ID, RMW_IMPLEMENTATION,
-    ROS_LOCALHOST_ONLY. Returns the list of files that were modified.
+    Only the variables whose argument is not None are written: ROS_DOMAIN_ID,
+    RMW_IMPLEMENTATION, ROS_LOCALHOST_ONLY. Returns the list of files that
+    were modified.
     """
     from .runtime import err, log
 
-    assignments = {
-        "ROS_DOMAIN_ID": str(domain_id),
-        "RMW_IMPLEMENTATION": resolve_rmw(rmw),
-        "ROS_LOCALHOST_ONLY": str(localhost_only),
-    }
+    assignments: Dict[str, str] = {}
+    if domain_id is not None:
+        assignments["ROS_DOMAIN_ID"] = str(domain_id)
+    if rmw is not None:
+        assignments["RMW_IMPLEMENTATION"] = resolve_rmw(rmw)
+    if localhost_only is not None:
+        assignments["ROS_LOCALHOST_ONLY"] = str(localhost_only)
+
+    if not assignments:
+        err("No ROS DDS variables selected to write; nothing to do.")
+        return []
 
     modified: List[str] = []
     considered = 0

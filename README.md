@@ -30,7 +30,7 @@ ros2-systemd-manager -v
 ## CLI
 
 ```bash
-ros2-systemd-manager [-v] [-c CONFIG] [-w WORKSPACE_KEY] [-f] [action]
+ros2-systemd-manager [-v] [-c CONFIG] [-w WORKSPACE_KEY] [-f] [-d [N]] [-r [NAME]] [-l [0|1]] [action]
 ```
 
 Global options:
@@ -41,9 +41,9 @@ Global options:
 | `-c`, `--config PATH` | Path to the YAML config file (default: `./ros2_services.yaml`, then the packaged default). |
 | `-w`, `--workspace-key KEY` | Operate on a single workspace key (default: all workspaces defined in the config). |
 | `-f`, `--force` | Force overwrite when running `init`. |
-| `-d`, `--domain-id N` | `ROS_DOMAIN_ID` value for the `set` action (default: `0`). |
-| `-r`, `--rmw NAME` | RMW implementation for the `set` action: `cyclonedds` \| `fastrtps` (default: `cyclonedds`). |
-| `-l`, `--localhost-only 0\|1` | `ROS_LOCALHOST_ONLY` value for the `set` action (default: `1`). |
+| `-d`, `--domain-id [N]` | `ROS_DOMAIN_ID` for `set` (default `0`). Bare `-d` applies the default after confirmation. |
+| `-r`, `--rmw [NAME]` | RMW for `set`: `cyclonedds` \| `fastrtps` (default `cyclonedds`). Bare `-r` applies the default after confirmation. |
+| `-l`, `--localhost-only [0\|1]` | `ROS_LOCALHOST_ONLY` for `set` (default `1`). Bare `-l` applies the default after confirmation. |
 
 Supported actions:
 
@@ -64,24 +64,46 @@ Supported actions:
 - **`update`** — Synchronize systemd with the YAML: stop previously tracked units, remove stale units (tracked but no longer present in the config), then install/start/enable the current units and refresh the Makefile. **Requires root.**
 - **`uninstall`** — Stop, disable, and remove the configured unit files, then run `daemon-reload` and `reset-failed`. **Requires root.**
 - **`makefile`** — Regenerate the local Makefile helper only; no systemd changes are made.
-- **`set`** — Write the ROS DDS environment into all shell rc/profile files. See [ROS DDS Environment](#ros-dds-environment-set) below. **Requires root.**
+- **`set`** — Write selected ROS DDS env vars into shell rc/profile files (only the keys you pass). See [ROS DDS Environment](#ros-dds-environment-set) below. **Requires root.**
 - **`upgrade`** — Self-upgrade this CLI tool via `pip install --upgrade`. Adds `--user` automatically when not in a virtual environment and not running as root.
 
 ## ROS DDS Environment (`set`)
 
-The `set` action writes (or updates) three ROS DDS variables into **all** relevant shell rc/profile files:
+The `set` action writes (or updates) ROS DDS variables into **all** relevant shell rc/profile files. The three variables it can manage are:
 
 - `ROS_DOMAIN_ID`
 - `RMW_IMPLEMENTATION` (resolved from `-r`: `cyclonedds` → `rmw_cyclonedds_cpp`, `fastrtps` → `rmw_fastrtps_cpp`; full `rmw_*_cpp` names pass through unchanged)
 - `ROS_LOCALHOST_ONLY`
 
-Files considered include the per-user `.bashrc`, `.bash_profile`, `.zshrc`, and `.profile` (for the invoking user under `sudo`, the effective user, and `/root`), plus `/etc/profile` and `/etc/environment`. Existing assignments are updated in place; missing variables are appended under a single managed block. When run under `sudo`, it targets `SUDO_USER`'s home so the real user's rc files are updated (not just `/root`).
+### What gets written
+
+Only the keys you actually request are touched — variables you do not pass are left unchanged.
+
+| Invocation | Behavior |
+| --- | --- |
+| `set` (no flags) | Prompts for confirmation, then writes **all three** defaults (`ROS_DOMAIN_ID=0`, `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`, `ROS_LOCALHOST_ONLY=1`). Declining aborts with no changes. |
+| `set -d 42 -r fastrtps` | Writes **only** the keys you passed (`ROS_DOMAIN_ID=42`, `RMW_IMPLEMENTATION=rmw_fastrtps_cpp`); `ROS_LOCALHOST_ONLY` is untouched. No confirmation. |
+| `set -d` (bare flag) | Prompts for confirmation, then writes **only** that key's default (`ROS_DOMAIN_ID=0`). Other keys untouched. |
+| `set -d 42 -r` | `ROS_DOMAIN_ID=42` (explicit, no prompt) + prompt to confirm `RMW_IMPLEMENTATION` default. |
+
+In short:
+
+- **No flags at all** → confirm before applying all three defaults.
+- **Any flag present** → only those keys are written.
+- **Bare flag** (no value) → confirm before applying that key's default.
+- **Explicit value** → applied directly, no confirmation.
 
 ```bash
-sudo ros2-systemd-manager set                          # domain=0, cyclonedds, localhost-only=1
-sudo ros2-systemd-manager set -d 42 -r fastrtps        # domain 42 + Fast DDS
+sudo ros2-systemd-manager set                          # confirm, then write all defaults
+sudo ros2-systemd-manager set -d 42                    # write only ROS_DOMAIN_ID=42
+sudo ros2-systemd-manager set -d 42 -r fastrtps        # write domain 42 + Fast DDS only
 sudo ros2-systemd-manager set -d 7 -l 0                # domain 7, allow multicast/remote
+sudo ros2-systemd-manager set -d                       # confirm, then write ROS_DOMAIN_ID=0
 ```
+
+### Files touched
+
+Files considered include the per-user `.bashrc`, `.bash_profile`, `.zshrc`, and `.profile` (for the invoking user under `sudo`, the effective user, and `/root`), plus `/etc/profile` and `/etc/environment`. Existing assignments are updated in place; missing variables are appended under a single managed block. When run under `sudo`, it targets `SUDO_USER`'s home so the real user's rc files are updated (not just `/root`).
 
 > **Note:** `set` does not change the per-service `ROS_DOMAIN_ID` set via the `ros_domain_id` workspace option — that one is injected directly into each unit's `Environment=`. Use `set` for the interactive shell environment used when you run `ros2 ...` manually.
 
