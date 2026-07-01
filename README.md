@@ -103,7 +103,20 @@ sudo ros2-systemd-manager set -d                       # confirm, then write ROS
 
 ### Files touched
 
-Files considered include the per-user `.bashrc`, `.bash_profile`, `.zshrc`, and `.profile` (for the invoking user under `sudo`, the effective user, and `/root`), plus `/etc/profile` and `/etc/environment`. Existing assignments are updated in place; missing variables are appended under a single managed block. When run under `sudo`, it targets `SUDO_USER`'s home so the real user's rc files are updated (not just `/root`).
+Files considered include the per-user `.bashrc`, `.bash_profile`, `.zshrc`, and `.profile` (for the invoking user under `sudo`, the effective user, and `/root`), plus `/etc/profile` and `/etc/environment`. When run under `sudo`, it targets `SUDO_USER`'s home so the real user's rc files are updated (not just `/root`).
+
+Safety rules when editing rc/profile files:
+
+- **New files are created and owned by the corresponding user.** rc/profile files that do not yet exist are created so the environment is actually applied. After writing, each file is `chown`ed to match its parent (home) directory's owner — so a `sudo` run never leaves a root-owned file in your home that you cannot read or edit. (System files under `/etc/` are owned by root, which is correct for them.)
+- **Ownership follows the home directory.** Whether created or updated, every file written is owned like its parent home directory (root for `/etc/`, the user for per-user homes), keeping it readable and writable by the corresponding user.
+- **Existing settings are updated in place.** If a variable is already assigned, its value is changed on the original line (never duplicated). Re-running with the same values is a no-op and leaves the file untouched. Missing variables are appended under a single managed block.
+- **Every effective line is annotated.** Each assignment line written or changed by the tool is suffixed with a trailing comment recording who and when, e.g.:
+
+  ```bash
+  export ROS_DOMAIN_ID=0  # modified by alice on 2026-06-30 12:34:56 using ros2-systemd-manager
+  ```
+
+  The `<user>` is the invoking user (`SUDO_USER` under `sudo`, otherwise the current user). Full-line comment headers (such as the managed-block banner) are not annotated.
 
 > **Note:** `set` does not change the per-service `ROS_DOMAIN_ID` set via the `ros_domain_id` workspace option — that one is injected directly into each unit's `Environment=`. Use `set` for the interactive shell environment used when you run `ros2 ...` manually.
 

@@ -1,6 +1,8 @@
+import getpass
 import os
 import pwd
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -110,18 +112,78 @@ def resolve_rmw(value: str) -> str:
     )
 
 
-def _update_rc_file(rc_file: Path, assignments: Dict[str, str]) -> str:
+def _extract_assignment_value(line: str, key: str) -> Optional[str]:
+    """Extract the value assigned to `key` from a single KEY=... line.
+
+    Returns the value with surrounding quotes and any trailing comment removed,
+    or None if the line does not assign `key`.
+    """
+    m = re.match(
+        rf"^[ \t]*(?:export[ \t]+)?{re.escape(key)}[ \t]*=[ \t]*(.+?)$",
+        line,
+    )
+    if not m:
+        return None
+    rest = m.group(1)
+    if "#" in rest:
+        rest = rest.split("#", 1)[0]
+    return rest.strip().strip("'").strip('"')
+
+
+def _invoking_user() -> str:
+    """The user who invoked the command (SUDO_USER under sudo, else current user)."""
+    sudo_user = os.environ.get("SUDO_USER")
+    if sudo_user:
+        return sudo_user
+    try:
+        return getpass.getuser()
+    except Exception:
+        return os.environ.get("USER") or "unknown"
+
+
+def _build_annotation() -> str:
+    """Trailing comment added to every effective line modified by this tool."""
+    user = _invoking_user()
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return f"# modified by {user} on {timestamp} using ros2-systemd-manager"
+
+
+def _owner_of(path: Path) -> tuple:
+    """Return (uid, gid) of `path`, or (-1, -1) if it cannot be stated."""
+    try:
+        st = path.stat()
+        return st.st_uid, st.st_gid
+    except OSError:
+        return -1, -1
+
+
+def _update_rc_file(
+    rc_file: Path,
+    assignments: Dict[str, str],
+    annotation: str,
+) -> str:
     """Update or append each KEY=VALUE assignment in rc_file.
 
-    Existing assignment lines are replaced in place; keys that are absent are
-    appended together under a single managed block. Returns one of:
-    "modified" (content changed and written), "unchanged" (already at target
-    values), or "skipped" (permission denied — a per-file error is logged).
+    Existing assignment lines are updated in place only when their value differs
+    (no duplicate appends, no needless rewrites); absent keys are appended under a
+    single managed block. Every effective line written by this tool is suffixed
+    with `annotation`.
+
+    Files that do not yet exist are created. After writing, ownership is set to
+    match the parent (home) directory so the corresponding user can read and edit
+    the file — without this, a sudo run would leave a newly created rc/profile
+    root-owned and unusable by the user.
+
+    Returns one of:
+      "modified"  content changed and written,
+      "unchanged" all requested values were already present,
+      "skipped"   permission denied (a per-file error is logged).
     """
     from .runtime import err
 
+    existed = rc_file.is_file()
     try:
-        text = rc_file.read_text(encoding="utf-8", errors="ignore") if rc_file.is_file() else ""
+        text = rc_file.read_text(encoding="utf-8", errors="ignore") if existed else ""
     except PermissionError:
         err(f"Permission denied: {rc_file} (try with sudo)")
         return "skipped"
@@ -129,11 +191,21 @@ def _update_rc_file(rc_file: Path, assignments: Dict[str, str]) -> str:
     new_text = text
     to_append: List[str] = []
     for key, value in assignments.items():
+        desired_value = str(value)
+        desired_line = f"export {key}={desired_value}  {annotation}"
         pattern = _var_line_pattern(key)
-        if pattern.search(new_text):
-            new_text = pattern.sub(f"export {key}={value}", new_text)
+        matches = list(pattern.finditer(new_text))
+        if matches:
+            # Value already correct everywhere -> leave the line (and any existing
+            # annotation) untouched to avoid needless churn.
+            if all(
+                _extract_assignment_value(m.group(0), key) == desired_value
+                for m in matches
+            ):
+                continue
+            new_text = pattern.sub(lambda _m: desired_line, new_text)
         else:
-            to_append.append(f"export {key}={value}")
+            to_append.append(desired_line)
 
     if to_append:
         block = (
@@ -148,6 +220,15 @@ def _update_rc_file(rc_file: Path, assignments: Dict[str, str]) -> str:
     try:
         rc_file.parent.mkdir(parents=True, exist_ok=True)
         rc_file.write_text(new_text, encoding="utf-8")
+        # Own the file like its parent (home) directory so the corresponding user
+        # can read/edit it. This matters for newly created files under sudo, which
+        # would otherwise be root-owned.
+        owner_uid, owner_gid = _owner_of(rc_file.parent)
+        if owner_uid != -1:
+            try:
+                os.chown(rc_file, owner_uid, owner_gid)
+            except OSError:
+                pass
         return "modified"
     except PermissionError:
         err(f"Permission denied: {rc_file} (try with sudo)")
@@ -180,6 +261,7 @@ def set_ros_env(
         err("No ROS DDS variables selected to write; nothing to do.")
         return []
 
+    annotation = _build_annotation()
     modified: List[str] = []
     considered = 0
     skipped = 0
@@ -187,7 +269,7 @@ def set_ros_env(
         if not rc_file.parent.is_dir():
             continue
         considered += 1
-        status = _update_rc_file(rc_file, assignments)
+        status = _update_rc_file(rc_file, assignments, annotation)
         if status == "modified":
             modified.append(str(rc_file))
         elif status == "skipped":
