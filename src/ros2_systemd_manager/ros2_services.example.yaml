@@ -16,6 +16,8 @@
 #    files. Only the keys you pass are written; a bare flag (-d/-r/-l without a value) or no flags
 #    at all prompts for confirmation before applying the default value(s):
 #    domain=0, rmw=cyclonedds, localhost-only=1.
+#    Typical use: fix a DDS mismatch where Foxglove shows topics but `ros2 topic list` does not —
+#    set your shell's DDS env to match your services (e.g. `set -d 42`), then open a new terminal.
 #
 # Supported actions (each scoped to THIS directory's config by default; add -a/--all
 # to operate across every tracked config — every directory you have ever applied):
