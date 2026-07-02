@@ -16,14 +16,18 @@
 #    files. Only the keys you pass are written; a bare flag (-d/-r/-l without a value) or no flags
 #    at all prompts for confirmation before applying the default value(s):
 #    domain=0, rmw=cyclonedds, localhost-only=1.
+#    Typical use: fix a DDS mismatch where Foxglove shows topics but `ros2 topic list` does not —
+#    set your shell's DDS env to match your services (e.g. `set -d 42`), then open a new terminal.
 #
-# Supported actions:
+# Supported actions (each scoped to THIS directory's config by default; add -a/--all
+# to operate across every tracked config — every directory you have ever applied):
 # - upgrade                Self-upgrade this tool via pip install --upgrade
 # - install                Install unit files only, do not start or enable
 # - apply                  Install + start + enable on boot
 # - uninstall              Uninstall (stop, disable, remove unit files)
-# - update                 Stop previous units, remove stale units, then install/start/enable current units
+# - update                 Stop this config's previous units, remove its stale units, then install/start/enable current units
 # - makefile               Regenerate Makefile only (no systemd changes)
+# - list                   Print this config's unit names (list --all: every tracked config)
 
 # Optional; when omitted, default action is `apply`.
 # actions:

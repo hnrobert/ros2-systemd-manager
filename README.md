@@ -1,153 +1,229 @@
 # ROS2 Systemd Manager
 
-ROS2 Systemd Manager is a YAML-driven tool to manage ROS 2 launch tasks as systemd services. Describe your workspaces and services once in `ros2_services.yaml`, then install, start, enable, update, and uninstall them through a single declarative config — with a generated Makefile for everyday `systemctl` shortcuts and an optional helper to write the ROS DDS environment (`ROS_DOMAIN_ID` / `RMW_IMPLEMENTATION` / `ROS_LOCALHOST_ONLY`) into your shell profiles.
+[![PyPI version](https://img.shields.io/pypi/v/ros2-systemd-manager)](https://pypi.org/project/ros2-systemd-manager/)
+[![Python](https://img.shields.io/pypi/pyversions/ros2-systemd-manager)](https://pypi.org/project/ros2-systemd-manager/)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](./LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20systemd-blue)](#installation)
 
-## What It Does
+> Turn scattered `ros2 launch ...` commands into reliable, boot-safe systemd services — described in one YAML file.
 
-- Bootstrap local files with `ros2-systemd-manager init`
-- Install units with `install`
-- Install + start + enable with `apply`
-- Remove units with `uninstall`
-- Run synchronized update flow with stale-unit cleanup via `update`
-- Regenerate Makefile only with `makefile`
-- Upgrade the tool to the latest version via `upgrade`
-- Write the ROS DDS environment into all shell rc/profile files with `set`
+If you've ever lost a robot stack to a reboot, juggled a dozen terminal tabs, or hand-written `systemctl` unit files only to watch them drift out of sync with reality, this is for you. **ROS2 Systemd Manager** takes a single declarative `ros2_services.yaml` and turns it into real systemd services that:
+
+- **Start on boot** and **restart on crash** — no babysitting required.
+- **Track dependencies** (`depends_on`) so your bringup ordering is correct every time.
+- **Stay in sync** with your config — `update` reconciles reality with your YAML, and cleans up only what *this* project owns.
+- **Give you a `Makefile`** of shortcuts — `make logs`, `make status`, `make restart` …
+- Optionally **stamp the ROS DDS environment** (`ROS_DOMAIN_ID` / `RMW_IMPLEMENTATION` / `ROS_LOCALHOST_ONLY`) into your shell profiles.
+
+---
+
+## Highlights
+
+- **One YAML, many services** — workspaces, dependencies, capabilities, CPU affinity, per-service users, all declarative.
+- **Easy to use** — for example, `init` scaffolds a config + Makefile, `apply` deploys it, and `set` aligns your shell's DDS environment with your services; the generated Makefile gives you `make <op>-<service>` for every service, and `make <op>-all` for every tracked config.
+- **Reconcile, don't replace** — `update` stops old units, removes stale ones, and brings the current set online — scoped to the current directory so you never nuke a *different* project's services.
+- **Multi-project friendly** — keep a separate `ros2_services.yaml` per project directory; `--all` reaches across all of them when you really mean it.
+- **Safe by default** — MD5-tracked unit files, manual-edit detection with diffing + archiving, and a confirmation prompt before overwriting anything you touched by hand.
+- **Zero magic** — it writes ordinary systemd unit files you can read, `systemctl status`, and debug like any other service.
+
+## Table of contents
+
+- [ROS2 Systemd Manager](#ros2-systemd-manager)
+  - [Highlights](#highlights)
+  - [Table of contents](#table-of-contents)
+  - [Quick start](#quick-start)
+  - [Installation](#installation)
+  - [CLI](#cli)
+    - [Action reference](#action-reference)
+    - [Scoping: current directory vs. `--all`](#scoping-current-directory-vs---all)
+  - [ROS DDS Environment (`set`)](#ros-dds-environment-set)
+    - [When to use it](#when-to-use-it)
+    - [What gets written](#what-gets-written)
+    - [Files touched \& safety](#files-touched--safety)
+  - [Init](#init)
+  - [YAML reference](#yaml-reference)
+    - [`systemd` — unit placement](#systemd--unit-placement)
+    - [`runtime` — defaults shared by all services (unless overridden per service)](#runtime--defaults-shared-by-all-services-unless-overridden-per-service)
+    - [`workspaces` — a mapping of workspace keys (selectable via `--workspace-key`)](#workspaces--a-mapping-of-workspace-keys-selectable-via---workspace-key)
+    - [Service entries (`workspaces.<key>.services[]`)](#service-entries-workspaceskeyservices)
+    - [`makefile`](#makefile)
+    - [Example YAML configuration](#example-yaml-configuration)
+    - [Generated unit structure](#generated-unit-structure)
+  - [Generated Makefile](#generated-makefile)
+  - [File tracking \& safety](#file-tracking--safety)
+    - [General safety](#general-safety)
+  - [FAQ](#faq)
+    - [Foxglove shows topics, but `ros2 topic list` doesn't](#foxglove-shows-topics-but-ros2-topic-list-doesnt)
+    - [I ran `set`, but `ros2 topic list` is still empty](#i-ran-set-but-ros2-topic-list-is-still-empty)
+    - [Does `update` or `uninstall` touch my *other* projects?](#does-update-or-uninstall-touch-my-other-projects)
+    - [How do I run an action across every project at once?](#how-do-i-run-an-action-across-every-project-at-once)
+    - [Where does the tool store its data?](#where-does-the-tool-store-its-data)
+    - [A root-owned rc/profile file appeared in my home after a `sudo` run](#a-root-owned-rcprofile-file-appeared-in-my-home-after-a-sudo-run)
+  - [Contributing](#contributing)
+
+## Quick start
+
+```bash
+# 1. install
+sudo pip install ros2-systemd-manager
+
+# 2. in your ROS 2 workspace, generate a config + Makefile
+ros2-systemd-manager init
+
+# 3. edit ros2_services.yaml to match your stack, then deploy
+sudo make apply
+
+# 4. live happily ever after
+make status          # how is everything doing?
+make logs            # tail all services
+```
+
+That's it. Your launch tasks now survive reboots and restart themselves on failure.
 
 ## Installation
 
-> **Note:** This tool is designed for Linux systems with systemd. Ensure you have Python 3.9+ and pip installed. It is recommended to use sudo for installation to allow systemd unit management.
+> **Note:** Designed for **Linux with systemd**. Requires Python 3.9+ and pip. Use `sudo` for installation so it can manage systemd units.
 
 ```bash
 sudo pip install ros2-systemd-manager
-```
-
-Verify the install:
-
-```bash
-ros2-systemd-manager -v
+ros2-systemd-manager -v          # sanity check
 ```
 
 ## CLI
 
 ```bash
-ros2-systemd-manager [-v] [-c CONFIG] [-w WORKSPACE_KEY] [-f] [-d [N]] [-r [NAME]] [-l [0|1]] [action]
+ros2-systemd-manager [-v] [-c CONFIG] [-w WORKSPACE_KEY] [-f] [-a] [-d [N]] [-r [NAME]] [-l [0|1]] [action]
 ```
-
-Global options:
 
 | Option | Description |
 | --- | --- |
 | `-v`, `--version` | Show the program's version number and exit. |
-| `-c`, `--config PATH` | Path to the YAML config file (default: `./ros2_services.yaml`, then the packaged default). |
-| `-w`, `--workspace-key KEY` | Operate on a single workspace key (default: all workspaces defined in the config). |
+| `-c`, `--config PATH` | Path to the YAML config (default: `./ros2_services.yaml`, then the packaged default). |
+| `-w`, `--workspace-key KEY` | Operate on a single workspace key (default: all workspaces in the config). |
 | `-f`, `--force` | Force overwrite when running `init`. |
+| `-a`, `--all` | Operate across **all** tracked configs/units (every directory ever installed), not just the current one. Applies to `install` / `apply` / `update` / `uninstall` / `list`. |
+| `-n`, `--dry-run` | With `set`: list the rc/profile files that would change (and the exact lines that would be written) **without modifying anything**. Does not require root. |
 | `-d`, `--domain-id [N]` | `ROS_DOMAIN_ID` for `set` (default `0`). Bare `-d` applies the default after confirmation. |
 | `-r`, `--rmw [NAME]` | RMW for `set`: `cyclonedds` \| `fastrtps` (default `cyclonedds`). Bare `-r` applies the default after confirmation. |
 | `-l`, `--localhost-only [0\|1]` | `ROS_LOCALHOST_ONLY` for `set` (default `1`). Bare `-l` applies the default after confirmation. |
 
-Supported actions:
-
-- `init`
-- `install`
-- `apply`
-- `uninstall`
-- `update`
-- `makefile`
-- `set`
-- `upgrade`
+**Actions:** `init` · `install` · `apply` · `uninstall` · `update` · `makefile` · `list` · `set` · `upgrade`
 
 ### Action reference
 
-- **`init`** — Create a default `ros2_services.yaml` template and Makefile in the current directory. Auto-fills `user`/`group` with the current user, `home` with the current home directory, and sets the workspace key/path to the current directory. Also auto-detects an existing `ROS_DOMAIN_ID` from your shell rc/profile files and injects it as `ros_domain_id`. Use `--force` to overwrite an existing config, or `--config PATH` to write elsewhere.
-- **`install`** — Write the unit files to the systemd unit directory and run `daemon-reload`, without starting or enabling them. **Requires root.**
-- **`apply`** — Install units, then start and enable them on boot (services with `enable: false` are started but not enabled). **Requires root.**
-- **`update`** — Synchronize systemd with the YAML: stop previously tracked units, remove stale units (tracked but no longer present in the config), then install/start/enable the current units and refresh the Makefile. **Requires root.**
-- **`uninstall`** — Stop, disable, and remove the configured unit files, then run `daemon-reload` and `reset-failed`. **Requires root.**
-- **`makefile`** — Regenerate the local Makefile helper only; no systemd changes are made.
-- **`set`** — Write selected ROS DDS env vars into shell rc/profile files (only the keys you pass). See [ROS DDS Environment](#ros-dds-environment-set) below. **Requires root.**
-- **`upgrade`** — Self-upgrade this CLI tool via `pip install --upgrade`. Adds `--user` automatically when not in a virtual environment and not running as root.
+- **`init`** — Scaffold a default `ros2_services.yaml` and Makefile in the current directory. Auto-fills `user`/`group`/`home`, sets the workspace key/path to the current directory, and even auto-detects an existing `ROS_DOMAIN_ID` from your shell profiles. Use `--force` to overwrite, or `--config PATH` to write elsewhere.
+- **`install`** — Write unit files + `daemon-reload`, **without** starting or enabling. **Requires root.** Current config only (`-a` = every tracked config).
+- **`apply`** — Install, then start and enable on boot (`enable: false` services start but won't auto-start). **Requires root.** Current config only (`-a` = every tracked config).
+- **`update`** — Reconcile systemd with your YAML: stop this config's previously tracked units, remove stale ones (tracked for **this** config but no longer defined in it), then bring the current set online and refresh the Makefile. Stale cleanup is **scoped per directory** — updating one project never touches another's units. **Requires root.** `-a` updates every tracked config.
+- **`uninstall`** — Stop, disable, remove unit files, `daemon-reload`, `reset-failed`. **Requires root.** Current config only; `uninstall -a` removes every tracked unit everywhere.
+- **`makefile`** — Regenerate the Makefile helper only; no systemd changes.
+- **`list`** — Print this config's unit names (one per line). `list --all` prints every tracked unit across all configs. Handy on its own and used by the Makefile `-all` targets.
+- **`set`** — Write selected ROS DDS env vars into shell rc/profile files (only the keys you pass). See [ROS DDS Environment](#ros-dds-environment-set). **Requires root.**
+- **`upgrade`** — Self-upgrade via `pip install --upgrade` (adds `--user` automatically when not in a venv and not root).
+
+### Scoping: current directory vs. `--all`
+
+Keep a **separate `ros2_services.yaml` in each project directory**, and every action defaults to the **current directory only**. The tool remembers which config installed each unit (an `.origin` sidecar in its tracking store), so:
+
+- no flag → only the current directory's config.
+- **`-a` / `--all`** → every config the tool has ever installed (every directory you've `apply`-ed from).
+
+```bash
+sudo ros2-systemd-manager update           # only this project
+sudo ros2-systemd-manager update -a        # every tracked project
+sudo ros2-systemd-manager uninstall -a     # nuke every tracked unit everywhere
+ros2-systemd-manager list --all            # see everything the tool manages
+```
+
+> **Migration:** units tracked before this feature have no recorded origin. They're left untouched by default `update`/`uninstall` (safe) and still swept by `--all`. Origins attach the next time you `apply`/`update` each config.
 
 ## ROS DDS Environment (`set`)
 
-The `set` action writes (or updates) ROS DDS variables into **all** relevant shell rc/profile files. The three variables it can manage are:
+A focused helper that writes (or updates) the ROS DDS variables into **all** relevant shell rc/profile files:
 
 - `ROS_DOMAIN_ID`
-- `RMW_IMPLEMENTATION` (resolved from `-r`: `cyclonedds` → `rmw_cyclonedds_cpp`, `fastrtps` → `rmw_fastrtps_cpp`; full `rmw_*_cpp` names pass through unchanged)
+- `RMW_IMPLEMENTATION` (resolved from `-r`: `cyclonedds` → `rmw_cyclonedds_cpp`, `fastrtps` → `rmw_fastrtps_cpp`; full `rmw_*_cpp` names pass through)
 - `ROS_LOCALHOST_ONLY`
+
+### When to use it
+
+`set` solves the classic "Foxglove shows topics but `ros2 topic list` doesn't" mismatch by aligning your interactive shell's DDS environment with your services'. See the [FAQ](#faq) for the full explanation and one-command fix.
 
 ### What gets written
 
-Only the keys you actually request are touched — variables you do not pass are left unchanged.
+Only the keys you actually request are touched — the rest are left alone.
 
 | Invocation | Behavior |
 | --- | --- |
-| `set` (no flags) | Prompts for confirmation, then writes **all three** defaults (`ROS_DOMAIN_ID=0`, `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`, `ROS_LOCALHOST_ONLY=1`). Declining aborts with no changes. |
-| `set -d 42 -r fastrtps` | Writes **only** the keys you passed (`ROS_DOMAIN_ID=42`, `RMW_IMPLEMENTATION=rmw_fastrtps_cpp`); `ROS_LOCALHOST_ONLY` is untouched. No confirmation. |
-| `set -d` (bare flag) | Prompts for confirmation, then writes **only** that key's default (`ROS_DOMAIN_ID=0`). Other keys untouched. |
-| `set -d 42 -r` | `ROS_DOMAIN_ID=42` (explicit, no prompt) + prompt to confirm `RMW_IMPLEMENTATION` default. |
+| `set` (no flags) | Prompts to confirm, then writes **all three** defaults. Declining aborts with no changes. |
+| `set -d 42 -r fastrtps` | Writes **only** the keys you passed; `ROS_LOCALHOST_ONLY` untouched. No prompt. |
+| `set -d` (bare) | Prompts to confirm, then writes **only** that key's default. |
+| `set -d 42 -r` | `ROS_DOMAIN_ID=42` (explicit, no prompt) + prompt to confirm the `RMW` default. |
 
-In short:
-
-- **No flags at all** → confirm before applying all three defaults.
-- **Any flag present** → only those keys are written.
-- **Bare flag** (no value) → confirm before applying that key's default.
-- **Explicit value** → applied directly, no confirmation.
+In short: **no flags** → confirm all defaults; **any flag** → only those keys; **bare flag** → confirm that key's default; **explicit value** → applied directly.
 
 ```bash
 sudo ros2-systemd-manager set                          # confirm, then write all defaults
 sudo ros2-systemd-manager set -d 42                    # write only ROS_DOMAIN_ID=42
-sudo ros2-systemd-manager set -d 42 -r fastrtps        # write domain 42 + Fast DDS only
+sudo ros2-systemd-manager set -d 42 -r fastrtps        # domain 42 + Fast DDS only
 sudo ros2-systemd-manager set -d 7 -l 0                # domain 7, allow multicast/remote
-sudo ros2-systemd-manager set -d                       # confirm, then write ROS_DOMAIN_ID=0
+ros2-systemd-manager set -d 42 --dry-run               # preview which files/lines change, write nothing
 ```
 
-### Files touched
+`--dry-run` (`-n`) is a safe preview: it reports each rc/profile file that would be created or updated and the exact effective line (with annotation) it would receive — without touching the filesystem, and without needing `sudo`. Example output:
 
-Files considered include the per-user `.bashrc`, `.bash_profile`, `.zshrc`, and `.profile` (for the invoking user under `sudo`, the effective user, and `/root`), plus `/etc/profile` and `/etc/environment`. Existing assignments are updated in place; missing variables are appended under a single managed block. When run under `sudo`, it targets `SUDO_USER`'s home so the real user's rc files are updated (not just `/root`).
+```text
+[INFO] Dry run — no files will be changed.
+  [update ] /home/alice/.bashrc
+           update: export ROS_DOMAIN_ID=42  # modified by alice on 2026-07-03 10:00:00 using ros2-systemd-manager
+  [create ] /home/alice/.bash_profile
+           append: export ROS_DOMAIN_ID=42  # modified by alice on 2026-07-03 10:00:00 using ros2-systemd-manager
+```
 
-> **Note:** `set` does not change the per-service `ROS_DOMAIN_ID` set via the `ros_domain_id` workspace option — that one is injected directly into each unit's `Environment=`. Use `set` for the interactive shell environment used when you run `ros2 ...` manually.
+### Files touched & safety
 
-## Init Output
+Considered files: per-user `.bashrc`, `.bash_profile`, `.zshrc`, `.profile` (for the invoking user under `sudo`, the effective user, and `/root`), plus `/etc/profile` and `/etc/environment`. Under `sudo` it targets `SUDO_USER`'s home so *your* rc files are updated (not just `/root`).
 
-Run in your desired config directory (e.g., ROS 2 workspace root) to generate the default YAML config and Makefile targets:
+- **New files are created and owned by the right user.** rc/profile files that don't yet exist are created, then `chown`ed to match their parent (home) directory's owner — so a `sudo` run never leaves a root-owned file in your home you can't read or edit. (`/etc/` files stay root-owned, correctly.)
+- **Ownership follows the home directory** — whether created or updated, every file stays readable/writable by its user.
+- **Existing settings update in place** — values change on the original line (never duplicated); re-running with the same values is a no-op.
+- **Every effective line is annotated** with who/when, e.g.:
+
+  ```bash
+  export ROS_DOMAIN_ID=0  # modified by alice on 2026-06-30 12:34:56 using ros2-systemd-manager
+  ```
+
+> **Note:** `set` only affects the interactive shell environment. The per-service `ros_domain_id` workspace option is injected directly into each unit's `Environment=` instead.
+
+## Init
+
+Run in your desired config directory (e.g. your ROS 2 workspace root):
 
 ```bash
 ros2-systemd-manager init
 ```
 
-Generated files:
+Generates:
 
-- `./ros2_services.yaml` (default configuration)
-- `./ros2-systemd-manager.mk` (generated makefile targets fragment)
-- `./Makefile` (entrypoint that includes the `.mk` file)
+- `./ros2_services.yaml` — default configuration
+- `./ros2-systemd-manager.mk` — generated makefile targets fragment
+- `./Makefile` — entrypoint that includes the `.mk` fragment
 
-> **Note:** The tool places generated makefile targets into `ros2-systemd-manager.mk` to keep your root `Makefile` clean. The root `Makefile` will automatically include the `.mk` fragment.
+> **Note:** Targets live in `ros2-systemd-manager.mk` to keep your root `Makefile` clean; the root `Makefile` auto-includes the fragment.
 
-## YAML Keys
+## YAML reference
 
-Required top-level sections:
+**Required top-level sections:** `systemd`, `runtime`, `workspaces`.
+**Optional:** `actions` (e.g. `default_action`; default `apply`), `makefile`.
 
-- `systemd`
-- `runtime`
-- `workspaces`
-
-Optional top-level sections:
-
-- `actions` (e.g. `default_action`; default action is `apply`)
-- `makefile`
-
-### `systemd`
-
-Controls unit placement and install behavior.
+### `systemd` — unit placement
 
 | Key | Default | Description |
 | --- | --- | --- |
 | `unit_dir` | `/etc/systemd/system` | Directory where unit files are written. |
 | `wanted_by` | `multi-user.target` | `[Install] WantedBy=` target (auto-start on boot). |
 
-### `runtime`
-
-Defaults shared by all services unless overridden per service.
+### `runtime` — defaults shared by all services (unless overridden per service)
 
 | Key | Default | Description |
 | --- | --- | --- |
@@ -158,9 +234,7 @@ Defaults shared by all services unless overridden per service.
 | `restart` | `on-failure` | systemd `Restart=` policy. |
 | `restart_sec` | `3` | systemd `RestartSec=` (seconds). |
 
-### `workspaces`
-
-A mapping of workspace keys (selectable via `--workspace-key`). Each workspace supports:
+### `workspaces` — a mapping of workspace keys (selectable via `--workspace-key`)
 
 | Key | Required | Description |
 | --- | --- | --- |
@@ -177,17 +251,80 @@ A mapping of workspace keys (selectable via `--workspace-key`). Each workspace s
 | `unit_name` | yes | — | systemd unit file name (e.g. `ros2-foo.service`). |
 | `launch_command` | yes | — | Command run after sourcing setup scripts (e.g. `ros2 launch ...`). |
 | `description` | no | `unit_name` | `[Unit] Description=`. |
-| `depends_on` | no | `[]` | List of unit names; emits `Requires=` and `After=`. Must exist in the same workspace. |
-| `service_options` | no | `[]` | List of raw `[Service]` lines (e.g. `CapabilityBoundingSet=`, `CPUAffinity=`). |
-| `use_root` | no | `false` | When `true`, force this service to run as `root`/`root` with `HOME=/root`. |
-| `enable` | no | `true` | When `false`, the service is started but not enabled on boot. |
+| `depends_on` | no | `[]` | Unit names; emits `Requires=` + `After=`. Must exist in the same workspace. |
+| `service_options` | no | `[]` | Raw `[Service]` lines (e.g. `CapabilityBoundingSet=`, `CPUAffinity=`). |
+| `use_root` | no | `false` | When `true`, force this service to run as `root` with `HOME=/root`. |
+| `enable` | no | `true` | When `false`, the service starts but isn't enabled on boot. |
 
 ### `makefile`
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `output_path` | `ros2-systemd-manager.mk` | Output path for the generated Makefile fragment (relative to the config file). |
+| `output_path` | `ros2-systemd-manager.mk` | Output path for the generated fragment (relative to the config file). |
 | `command` | `ros2-systemd-manager` | CLI command the Makefile invokes. |
+
+### Example YAML configuration
+
+```yaml
+systemd:
+  unit_dir: /etc/systemd/system
+  wanted_by: multi-user.target
+
+runtime:
+  user: user
+  group: user
+  home: /home/user
+  shell: /bin/bash
+  restart: on-failure
+  restart_sec: 3
+
+workspaces:
+  default_ws: # Workspace key, selectable via --workspace-key
+    path: /home/user/default_ws
+    setup_script: install/setup.bash
+    # ros_domain_id: 0 # Optional: isolate DDS traffic per workspace
+    services:
+      - unit_name: ros2-foxglove-bridge.service
+        description: ROS2 Foxglove Bridge
+        use_root: false # Optional: default false. When true, force this service to run as root.
+        enable: true # Optional: default true. Set false to start without auto-start on boot.
+        launch_command: ros2 launch foxglove_bridge foxglove_bridge_launch.xml
+
+      - unit_name: ros2-soem-bringup.service
+        description: ROS2 Simple Open EtherCAT Master Bringup (https://github.com/AIMEtherCAT/EcatV2_Master)
+        use_root: false
+        service_options: # Grant capabilities without running as root
+          - CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+          - AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+        launch_command: ros2 launch soem_bringup bringup.launch.py
+
+      - unit_name: ros2-infantry-chassis.service
+        description: ROS2 Infantry Chassis Controller
+        depends_on:
+          - ros2-soem-bringup.service
+        launch_command: ros2 launch infantry_controller infantry_chassis.launch.py
+
+      - unit_name: ros2-sp-vision-autoaim.service
+        description: TongjiSuperPower/sp_vision_25 Auto Aim (via self defined sp_vision_launch)
+        enable: false # Start on demand, do not auto-start on boot
+        service_options:
+          - CPUAffinity=1 2 3 # Pin to specific cores
+        launch_command: ros2 launch sp_vision_launch sp_vision.launch.py config:=sentry.yaml
+
+  # Multi-source example with domain isolation:
+  # another_ws:
+  #   path: /home/user/another_ws
+  #   ros_domain_id: 42
+  #   setup_scripts:
+  #     - /opt/ros/humble/setup.bash
+  #     - install/setup.bash
+  #   services:
+  #     - unit_name: ros2-another.service
+  #       description: Another workspace service
+  #       launch_command: ros2 run pkg node
+```
+
+This demonstrates: `systemd` placement, shared `runtime` defaults, multiple `workspaces`, `depends_on` ordering, `service_options` for capabilities/CPU affinity, `enable: false`, `ros_domain_id` DDS isolation, and multi-source `setup_scripts`.
 
 ### Generated unit structure
 
@@ -216,140 +353,111 @@ RestartSec=<restart_sec>
 WantedBy=<wanted_by>
 ```
 
-## Example YAML Configuration
-
-Below is a sample `ros2_services.yaml` demonstrating common fields and layout.
-
-```yaml
-systemd:
-  unit_dir: /etc/systemd/system
-  wanted_by: multi-user.target
-
-runtime:
-  user: user
-  group: user
-  home: /home/user
-  shell: /bin/bash
-  restart: on-failure
-  restart_sec: 3
-
-workspaces:
-  default_ws: # Workspace key, selectable via --workspace-key
-    path: /home/user/default_ws
-    setup_script: install/setup.bash
-    # ros_domain_id: 0 # Optional: set ROS_DOMAIN_ID to isolate DDS traffic per workspace
-    services:
-      - unit_name: ros2-foxglove-bridge.service
-        description: ROS2 Foxglove Bridge
-        use_root: false # Optional: default false. When true, force this service to run as root.
-        enable: true # Optional: default true. Set false to start without auto-start on boot.
-        launch_command: ros2 launch foxglove_bridge foxglove_bridge_launch.xml
-
-      - unit_name: ros2-soem-bringup.service
-        description: ROS2 Simple Open EtherCAT Master Bringup (https://github.com/AIMEtherCAT/EcatV2_Master)
-        use_root: false
-        service_options: # Example of granting specific capabilities to a service without running as root
-          - CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
-          - AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
-        launch_command: ros2 launch soem_bringup bringup.launch.py
-
-      - unit_name: ros2-infantry-chassis.service
-        description: ROS2 Infantry Chassis Controller
-        depends_on:
-          - ros2-soem-bringup.service
-        launch_command: ros2 launch infantry_controller infantry_chassis.launch.py
-
-      - unit_name: ros2-sp-vision-autoaim.service
-        description: TongjiSuperPower/sp_vision_25 Auto Aim (via self defined sp_vision_launch)
-        enable: false # Example: start on demand, do not auto-start on boot
-        service_options:
-          - CPUAffinity=1 2 3 # Example of setting CPU affinity for a service
-        launch_command: ros2 launch sp_vision_launch sp_vision.launch.py config:=sentry.yaml
-
-  # Multi-source example with domain isolation:
-  # another_ws:
-  #   path: /home/user/another_ws
-  #   ros_domain_id: 42
-  #   setup_scripts:
-  #     - /opt/ros/humble/setup.bash
-  #     - install/setup.bash
-  #   services:
-  #     - unit_name: ros2-another.service
-  #       description: Another workspace service
-  #       launch_command: ros2 run pkg node
-```
-
-This example shows how to define:
-
-- `systemd` settings for unit placement and installation behavior
-- `runtime` defaults shared by all services
-- one or more `workspaces`, each with its own `services` list
-- `depends_on` relationships between services
-- optional `service_options` for extra systemd directives
-- optional `enable: false` to start a service without enabling it on boot
-- optional `ros_domain_id` to isolate DDS traffic per workspace
-- optional `setup_scripts` (list) to source multiple scripts before launching
-
 ## Generated Makefile
 
-> **Note:** The generated Makefile targets are designed to be intuitive and cover common systemd management tasks. You can customize the generated targets by modifying the `workspaces` section in your YAML config.
-
-Primary targets:
+Every project gets an intuitive Makefile of `systemctl` shortcuts, derived from its `workspaces`:
 
 ```bash
-make upgrade                  # self-upgrade ros2-systemd-manager via pip
-make install                  # install unit files only
+# This project only:
 make apply                    # install + start + enable
-make start                    # systemctl start all configured units
-make stop                     # systemctl stop all configured units
-make restart                  # systemctl restart all configured units
+make install                  # install unit files only
+make start / stop / restart   # control all configured units
 make status                   # systemctl status all configured units
-make status-long              # systemctl status with 100 log lines
-make enable                   # systemctl enable all configured units
-make disable                  # systemctl disable all configured units
+make status-long              # status with 100 log lines
+make enable / disable
 make logs                     # follow logs for all configured units
-make logs-recent              # show last 200 log lines for all configured units
+make logs-recent              # last 200 log lines
 make <op>-<service>           # op in start/stop/restart/status/enable/disable/logs
-make <op>-<service>-<sfx>     # e.g., logs-<svc>-recent, status-<svc>-long (100 lines)
-make uninstall                # uninstall all configured units
-make update                   # stop old + uninstall + install/start/enable + refresh mk
-make makefile                 # refresh generated mk only (no systemd changes)
+make <op>-<service>-<sfx>     # e.g. logs-<svc>-recent, status-<svc>-long
+make update                   # reconcile + refresh generated mk
+make uninstall                # remove all configured units
+make upgrade                  # self-upgrade via pip
+make makefile                 # refresh generated mk only
+make list                     # print this config's unit names
 ```
 
-Config behavior:
-
-- No hardcoded absolute config path.
-- **Default auto-discovery strictly looks for `./ros2_services.yaml` in the current running directory.**
-- Override manually via `CONFIG` environment variable or `--config` parameter:
+`-all` targets reach across **every tracked config** (every directory you've `apply`-ed from), via `list --all`:
 
 ```bash
-# Using Makefile with custom config
-make apply CONFIG=./my_services.yaml
+make start-all / stop-all / restart-all / status-all / status-all-long
+make enable-all / disable-all
+make logs-all / logs-recent-all
+make install-all / apply-all / update-all / uninstall-all
+make list --all               # print every tracked unit
+```
 
-# or
+**Config discovery:** no hardcoded path — it looks for `./ros2_services.yaml` in the current directory. Override with `CONFIG=` or `--config`:
+
+```bash
+make apply CONFIG=./my_services.yaml      # or:
 ros2-systemd-manager apply --config ./my_services.yaml
+sudo ros2-systemd-manager apply --workspace-key default_ws   # single workspace
 ```
 
-- Operate on a single workspace via `--workspace-key`:
+## File tracking & safety
 
-```bash
-sudo ros2-systemd-manager apply --workspace-key default_ws
-```
+- **Automatic backups** — whenever unit files in `/etc/systemd/system/` change (`update`/`install`/`uninstall`), the exact deployed file plus its MD5 hash (and a global `total.md5`) is stored under `~/.config/ros2-systemd-manager/previous-update/`, tagged with the originating config.
+- **Modification detection** — during `update`/`uninstall`, the tool uses `filecmp` + `diff` to detect manual edits. If found, it shows the diff and asks whether to archive your changes to `~/.config/ros2-systemd-manager/archive/` before proceeding. Choices: archive + proceed (`Y`), proceed without archiving (`u`), or cancel (`c`).
+- **Stale-unit cleanup** — `update` removes units no longer defined in the config, **scoped to the current config** so other projects are never affected.
 
-## File Tracking & Safety
-
-- **Automatic Backups**: Whenever files in `/etc/systemd/system/` are modified (via `update`, `install`, or `uninstall`), a copy of the exact deployed file along with its MD5 hash (and a global `total.md5` hash) is stored in `~/.config/ros2-systemd-manager/previous-update/`.
-- **Modification Detection**: During `update` or `uninstall` operations, the manager uses `filecmp` and `diff` to check if you have manually modified the systemd service file. If modifications are detected, it presents a diff in the terminal and asks if you want to archive your manual changes to `~/.config/ros2-systemd-manager/archive/` before proceeding with the overwrite/deletion. Choices: archive + proceed (`Y`), proceed without archiving (`u`), or cancel (`c`).
-- **Stale-unit Cleanup**: `update` compares the previously tracked units against the current config and removes any unit that is no longer defined.
-
-## Safety
+### General safety
 
 - Use trusted launch commands only.
-- Validate workspace paths and setup scripts before `apply` or `update`.
-- Prefer `install` first for new services.
+- Validate workspace paths and setup scripts before `apply`/`update`.
+- Prefer `install` first for brand-new services.
+
+## FAQ
+
+### Foxglove shows topics, but `ros2 topic list` doesn't
+
+A classic ROS 2 symptom, and the main reason `set` exists. It's almost always a **DDS environment mismatch**:
+
+- Your systemd services run with a specific `ROS_DOMAIN_ID` / `RMW_IMPLEMENTATION` / `ROS_LOCALHOST_ONLY`.
+- **Foxglove Studio** reaches the data *through the Foxglove Bridge service*, so it sees whatever the bridge sees — regardless of your terminal's settings.
+- Your **interactive shell** uses its *own* DDS settings. If those differ from the services', your `ros2` CLI ends up on a different DDS domain/participant than your stack, so topics look missing even though they're plainly visible in Foxglove.
+
+`set` aligns your shell with your services in one shot:
+
+```bash
+sudo ros2-systemd-manager set -d 42     # match the domain your services use
+ros2 topic list                         # ← run this in a NEW terminal afterwards
+```
+
+Use the same `ROS_DOMAIN_ID` as your workspace's `ros_domain_id`, the RMW your stack was built against, and a `ROS_LOCALHOST_ONLY` consistent with your discovery needs.
+
+### I ran `set`, but `ros2 topic list` is still empty
+
+`set` writes to rc/profile files, which only affects **new** shells. Open a fresh terminal or run `source ~/.bashrc` (and `source ~/.profile` for login shells) so the new DDS variables are loaded. Preview first with `set --dry-run` to confirm which files were touched.
+
+### Does `update` or `uninstall` touch my *other* projects?
+
+No — by default every action is scoped to the **current directory's** `ros2_services.yaml`. The tool records which config installed each unit (an `.origin` sidecar), so `update` only removes stale units that *this* config owned. Other directories' units are never touched unless you explicitly pass `-a`/`--all`.
+
+### How do I run an action across every project at once?
+
+Add `-a`/`--all` — it operates on every config the tool has ever installed:
+
+```bash
+sudo ros2-systemd-manager apply -a       # apply every tracked project
+sudo ros2-systemd-manager update -a      # reconcile every tracked project
+sudo ros2-systemd-manager uninstall -a   # remove every tracked unit everywhere
+ros2-systemd-manager list --all          # see everything the tool manages
+```
+
+The generated Makefile offers the same as `make apply-all`, `make update-all`, `make uninstall-all`, etc.
+
+### Where does the tool store its data?
+
+- **Unit files**: `/etc/systemd/system/<unit_name>` (configurable via `systemd.unit_dir`).
+- **Tracking store**: `~/.config/ros2-systemd-manager/previous-update/` — a copy of each deployed unit, its MD5, and the `.origin` config tag.
+- **Archived manual edits**: `~/.config/ros2-systemd-manager/archive/`.
+
+### A root-owned rc/profile file appeared in my home after a `sudo` run
+
+That shouldn't happen anymore — after writing, each rc/profile file is `chown`ed to match its parent (home) directory's owner, so a `sudo` run never leaves a file you can't read or edit. If you have a leftover root-owned file from an older version, re-running `set` will fix its ownership.
 
 ## Contributing
 
-Licensed under the Apache License 2.0. See [LICENSE](./LICENSE) for details.
+Licensed under the **Apache License 2.0** — see [LICENSE](./LICENSE).
 
 Contributions are welcome! Please open issues or submit pull requests for bug fixes, improvements, or new features.

@@ -8,12 +8,14 @@ from typing import List, Optional
 
 from .config import (get_help_text, load_yaml_config,
                      resolve_workspace_keys, validate_config)
-from .domain import resolve_rmw, set_ros_env
+from .domain import preview_ros_env, resolve_rmw, set_ros_env
 from .makefile_gen import write_makefile
 from .runtime import err, log, require_root
 from .scaffold import init_defaults
-from .systemd_ops import (install_only, install_start_enable, sync_update,
-                          uninstall)
+from .systemd_ops import (get_workspace_unit_names, install_only,
+                          install_start_enable, sync_update, uninstall,
+                          uninstall_all)
+from .version_control import all_config_paths, all_tracked_units
 
 
 def _default_config_path() -> str:
@@ -60,9 +62,10 @@ def get_help_text() -> str:
         "  init                Create a default YAML template and Makefile\n"
         "  install             Install unit files but do not start them\n"
         "  apply               Install, start, and enable unit files on boot\n"
-        "  update              Sync systemd with YAML (stops old/removed, updates tracked hashes)\n"
+        "  update              Sync systemd with YAML for THIS config (scoped per directory)\n"
         "  uninstall           Stop, disable, and securely remove unit files\n"
         "  makefile            Regenerate the local Makefile helper only\n"
+        "  list                Print this config's unit names (add --all for every tracked config)\n"
         "  upgrade             Self-upgrade this CLI tool remotely via pip\n"
         "  set [options]       Write ROS DDS env into shell profile/rc files (only keys you pass):\n"
         "                      ROS_DOMAIN_ID / RMW_IMPLEMENTATION / ROS_LOCALHOST_ONLY\n"
@@ -70,14 +73,24 @@ def get_help_text() -> str:
         "                        -r/--rmw [cyclonedds|fastrtps] (default cyclonedds)\n"
         "                        -l/--localhost-only [0|1]      (default 1)\n"
         "                      No options, or a bare flag (-d/-r/-l without a value), prompts for\n"
-        "                      confirmation before applying the default value(s).\n\n"
+        "                      confirmation before applying the default value(s).\n"
+        "                      Add -n/--dry-run to preview which files would change (no write).\n\n"
+        "SCOPING:\n"
+        "  By default install/apply/update/uninstall/list act on the CURRENT directory's\n"
+        "  ros2_services.yaml only. Pass -a/--all to operate across every tracked config\n"
+        "  (every directory you have ever applied).\n\n"
         "EXAMPLES:\n"
         "  ros2-systemd-manager init --force\n"
         "  sudo ros2-systemd-manager apply --config ./ros2_services.yaml\n"
+        "  sudo ros2-systemd-manager update                    # current directory only\n"
+        "  sudo ros2-systemd-manager update -a                 # every tracked config\n"
+        "  sudo ros2-systemd-manager uninstall                 # current directory only\n"
+        "  sudo ros2-systemd-manager uninstall -a              # every tracked unit\n"
         "  sudo ros2-systemd-manager set -d 42                 # write only ROS_DOMAIN_ID=42\n"
         "  sudo ros2-systemd-manager set -d 42 -r fastrtps     # write domain 42 + Fast DDS only\n"
         "  sudo ros2-systemd-manager set                       # confirm, then write all defaults\n"
-        "  sudo ros2-systemd-manager uninstall"
+        "  ros2-systemd-manager set -d 42 --dry-run            # preview files/lines, change nothing\n"
+        "  ros2-systemd-manager list --all                     # print every tracked unit"
     )
 
 
@@ -139,6 +152,18 @@ def parse_args() -> argparse.Namespace:
         "-f", "--force",
         action="store_true",
         help="Force overwrite when executing the 'init' action",
+    )
+    parser.add_argument(
+        "-a", "--all",
+        action="store_true",
+        help="Operate across ALL tracked configs/units (every directory ever installed), "
+             "not just the current one. Applies to install/apply/update/uninstall/list.",
+    )
+    parser.add_argument(
+        "-n", "--dry-run",
+        action="store_true",
+        help="With 'set': list the rc/profile files that would be changed (and the lines "
+             "that would be written) without modifying anything. Does not require root.",
     )
     return parser.parse_args()
 
@@ -214,6 +239,10 @@ def _run_set(args: argparse.Namespace) -> None:
                     err(f"Invalid --localhost-only: {localhost} (must be 0 or 1)")
                     sys.exit(1)
 
+    if getattr(args, "dry_run", False):
+        preview_ros_env(domain_id=domain, rmw=rmw, localhost_only=localhost)
+        return
+
     if confirm_items:
         header = (
             "No options specified. The following defaults will be written:"
@@ -232,6 +261,53 @@ def _run_set(args: argparse.Namespace) -> None:
     except ValueError as exc:
         err(str(exc))
         sys.exit(1)
+
+
+def _run_list(args: argparse.Namespace) -> None:
+    """Print tracked unit names, one per line. --all spans every tracked config."""
+    if args.all:
+        units = all_tracked_units()
+    else:
+        config_path = Path(args.config) if args.config else Path(
+            _default_config_path())
+        config = load_yaml_config(config_path)
+        validate_config(config)
+        workspace_keys = resolve_workspace_keys(args.workspace_key, config)
+        units = get_workspace_unit_names(config, workspace_keys)
+    for unit in units:
+        print(unit)
+
+
+def _run_all(action: str) -> None:
+    """Run install/apply/update/uninstall across every tracked config (--all)."""
+    config_paths = all_config_paths()
+    if not config_paths:
+        log("No tracked configs found. Run `apply` in each project directory first.")
+        return
+
+    log(f"--all: {action} across {len(config_paths)} tracked config(s).")
+
+    if action == "uninstall":
+        # Operates on the full tracked unit set; no config content required.
+        uninstall_all(Path("/etc/systemd/system"))
+        return
+
+    for cp in config_paths:
+        log(f"== {action}: {cp} ==")
+        try:
+            cfg = load_yaml_config(Path(cp))
+            validate_config(cfg)
+        except SystemExit:
+            log(f"Skipping {cp}: config not readable/invalid (will be cleaned by update).")
+            continue
+        workspace_keys = list(cfg.get("workspaces", {}).keys())
+        if action == "install":
+            install_only(cfg, workspace_keys, cp)
+        elif action == "apply":
+            install_start_enable(cfg, workspace_keys, cp)
+        elif action == "update":
+            sync_update(cfg, workspace_keys, cp)
+        write_makefile(cfg, Path(cp))
 
 
 def run() -> None:
@@ -258,11 +334,23 @@ def run() -> None:
         return
 
     if action_arg == "set":
-        require_root()
+        if not args.dry_run:
+            require_root()
         _run_set(args)
         return
 
-    # Actions that need a config file
+    if action_arg == "list":
+        _run_list(args)
+        return
+
+    # install / apply / update / uninstall / makefile require a config (unless --all)
+    if action_arg in {"install", "apply", "update", "uninstall"}:
+        require_root()
+
+    if args.all and action_arg in {"install", "apply", "update", "uninstall"}:
+        _run_all(action_arg)
+        return
+
     config_path = Path(args.config) if args.config else Path(
         _default_config_path())
     config = load_yaml_config(config_path)
@@ -270,22 +358,20 @@ def run() -> None:
 
     action = action_arg or config.get("actions", {}).get("default_action", "apply")
     workspace_keys = resolve_workspace_keys(args.workspace_key, config)
-
-    if action in {"install", "apply", "uninstall", "update"}:
-        require_root()
+    config_id = str(config_path.resolve())
 
     log(f"Config file: {config_path}")
     log(f"Workspace keys: {workspace_keys}")
     log(f"Action: {action}")
 
     if action == "install":
-        install_only(config, workspace_keys)
+        install_only(config, workspace_keys, config_id)
     elif action == "apply":
-        install_start_enable(config, workspace_keys)
+        install_start_enable(config, workspace_keys, config_id)
     elif action == "uninstall":
         uninstall(config, workspace_keys)
     elif action == "update":
-        sync_update(config, workspace_keys)
+        sync_update(config, workspace_keys, config_id)
     elif action == "makefile":
         log("Skipping systemd operations; refreshing Makefile only.")
     else:

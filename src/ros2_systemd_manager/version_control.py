@@ -100,7 +100,7 @@ def _recalculate_total_hash() -> None:
         pass
 
 
-def record_update(unit_name: str, content: str) -> None:
+def record_update(unit_name: str, content: str, config_path: str = "") -> None:
     PREVIOUS_UPDATE_DIR.mkdir(parents=True, exist_ok=True)
     tracked_file = PREVIOUS_UPDATE_DIR / unit_name
     try:
@@ -109,6 +109,12 @@ def record_update(unit_name: str, content: str) -> None:
         md5_hash = md5_string(content)
         md5_file = PREVIOUS_UPDATE_DIR / f"{unit_name}.md5"
         md5_file.write_text(md5_hash, encoding="utf-8")
+
+        # Remember which config installed this unit so update/uninstall can be
+        # scoped per-directory instead of touching units from other configs.
+        if config_path:
+            origin_file = PREVIOUS_UPDATE_DIR / f"{unit_name}.origin"
+            origin_file.write_text(config_path, encoding="utf-8")
 
         _recalculate_total_hash()
     except OSError as e:
@@ -121,13 +127,71 @@ def record_uninstall(unit_name: str) -> None:
 
     tracked_file = PREVIOUS_UPDATE_DIR / unit_name
     md5_file = PREVIOUS_UPDATE_DIR / f"{unit_name}.md5"
+    origin_file = PREVIOUS_UPDATE_DIR / f"{unit_name}.origin"
 
     try:
         if tracked_file.exists():
             tracked_file.unlink()
         if md5_file.exists():
             md5_file.unlink()
+        if origin_file.exists():
+            origin_file.unlink()
 
         _recalculate_total_hash()
     except OSError as e:
         err(f"Failed to record uninstall for {unit_name}: {e}")
+
+
+def _is_unit_file(name: str) -> bool:
+    """True for a tracking-store entry that represents a unit (not a sidecar)."""
+    return not (
+        name.endswith(".md5") or name.endswith(".origin") or name == "total.md5"
+    )
+
+
+def all_tracked_units() -> List[str]:
+    """Every tracked unit name across all configs (legacy originless units included)."""
+    if not PREVIOUS_UPDATE_DIR.exists():
+        return []
+    return sorted(
+        f.name for f in PREVIOUS_UPDATE_DIR.iterdir()
+        if f.is_file() and _is_unit_file(f.name)
+    )
+
+
+def tracked_units_for_config(config_path: str) -> List[str]:
+    """Unit names installed by the given config, matched via the .origin sidecar."""
+    if not PREVIOUS_UPDATE_DIR.exists():
+        return []
+    units: List[str] = []
+    for f in PREVIOUS_UPDATE_DIR.iterdir():
+        if not (f.is_file() and _is_unit_file(f.name)):
+            continue
+        origin_file = PREVIOUS_UPDATE_DIR / f"{f.name}.origin"
+        if not origin_file.exists():
+            continue
+        try:
+            if origin_file.read_text(encoding="utf-8").strip() == config_path:
+                units.append(f.name)
+        except OSError:
+            pass
+    return sorted(units)
+
+
+def all_config_paths() -> List[str]:
+    """Distinct config yaml paths (that still exist) the tool has installed for."""
+    if not PREVIOUS_UPDATE_DIR.exists():
+        return []
+    paths: List[str] = []
+    seen: set = set()
+    for f in PREVIOUS_UPDATE_DIR.iterdir():
+        if not (f.is_file() and f.name.endswith(".origin")):
+            continue
+        try:
+            cp = f.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if cp and cp not in seen and Path(cp).is_file():
+            seen.add(cp)
+            paths.append(cp)
+    return sorted(paths)
