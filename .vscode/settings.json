@@ -22,7 +22,8 @@
         "setuptools",
         "soem",
         "tofile",
-        "vars"
+        "vars",
+        "writable"
     ],
     "python.analysis.extraPaths": [
         "./src"
