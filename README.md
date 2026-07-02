@@ -30,7 +30,7 @@ ros2-systemd-manager -v
 ## CLI
 
 ```bash
-ros2-systemd-manager [-v] [-c CONFIG] [-w WORKSPACE_KEY] [-f] [-d [N]] [-r [NAME]] [-l [0|1]] [action]
+ros2-systemd-manager [-v] [-c CONFIG] [-w WORKSPACE_KEY] [-f] [-a] [-d [N]] [-r [NAME]] [-l [0|1]] [action]
 ```
 
 Global options:
@@ -41,6 +41,7 @@ Global options:
 | `-c`, `--config PATH` | Path to the YAML config file (default: `./ros2_services.yaml`, then the packaged default). |
 | `-w`, `--workspace-key KEY` | Operate on a single workspace key (default: all workspaces defined in the config). |
 | `-f`, `--force` | Force overwrite when running `init`. |
+| `-a`, `--all` | Operate across **all** tracked configs/units (every directory ever installed), not just the current directory. Applies to `install`/`apply`/`update`/`uninstall`/`list`. |
 | `-d`, `--domain-id [N]` | `ROS_DOMAIN_ID` for `set` (default `0`). Bare `-d` applies the default after confirmation. |
 | `-r`, `--rmw [NAME]` | RMW for `set`: `cyclonedds` \| `fastrtps` (default `cyclonedds`). Bare `-r` applies the default after confirmation. |
 | `-l`, `--localhost-only [0\|1]` | `ROS_LOCALHOST_ONLY` for `set` (default `1`). Bare `-l` applies the default after confirmation. |
@@ -53,19 +54,37 @@ Supported actions:
 - `uninstall`
 - `update`
 - `makefile`
+- `list`
 - `set`
 - `upgrade`
 
 ### Action reference
 
 - **`init`** — Create a default `ros2_services.yaml` template and Makefile in the current directory. Auto-fills `user`/`group` with the current user, `home` with the current home directory, and sets the workspace key/path to the current directory. Also auto-detects an existing `ROS_DOMAIN_ID` from your shell rc/profile files and injects it as `ros_domain_id`. Use `--force` to overwrite an existing config, or `--config PATH` to write elsewhere.
-- **`install`** — Write the unit files to the systemd unit directory and run `daemon-reload`, without starting or enabling them. **Requires root.**
-- **`apply`** — Install units, then start and enable them on boot (services with `enable: false` are started but not enabled). **Requires root.**
-- **`update`** — Synchronize systemd with the YAML: stop previously tracked units, remove stale units (tracked but no longer present in the config), then install/start/enable the current units and refresh the Makefile. **Requires root.**
-- **`uninstall`** — Stop, disable, and remove the configured unit files, then run `daemon-reload` and `reset-failed`. **Requires root.**
+- **`install`** — Write the unit files to the systemd unit directory and run `daemon-reload`, without starting or enabling them. **Requires root.** Affects only the current config (use `-a` for every tracked config).
+- **`apply`** — Install units, then start and enable them on boot (services with `enable: false` are started but not enabled). **Requires root.** Affects only the current config (use `-a` for every tracked config).
+- **`update`** — Synchronize systemd with the YAML: stop this config's previously tracked units, remove stale units (tracked for **this** config but no longer present in it), then install/start/enable the current units and refresh the Makefile. Stale cleanup is **scoped per directory**, so updating one `ros2_services.yaml` never removes units that belong to another directory. **Requires root.** Use `-a` to update every tracked config.
+- **`uninstall`** — Stop, disable, and remove the configured unit files, then run `daemon-reload` and `reset-failed`. **Requires root.** Affects only the current config; `uninstall -a` removes every tracked unit across all configs.
 - **`makefile`** — Regenerate the local Makefile helper only; no systemd changes are made.
+- **`list`** — Print this config's unit names, one per line. Add `-a`/`--all` to print every tracked unit across all configs. Useful on its own and used by the Makefile `-all` targets.
 - **`set`** — Write selected ROS DDS env vars into shell rc/profile files (only the keys you pass). See [ROS DDS Environment](#ros-dds-environment-set) below. **Requires root.**
 - **`upgrade`** — Self-upgrade this CLI tool via `pip install --upgrade`. Adds `--user` automatically when not in a virtual environment and not running as root.
+
+### Scoping: current directory vs. `--all`
+
+If you keep a **separate `ros2_services.yaml` in each project directory**, every action defaults to the **current directory only**. The tool records which config installed each unit (an `.origin` sidecar in the tracking store), so:
+
+- `install` / `apply` / `update` / `uninstall` / `list` with no flag → only the current directory's config.
+- The same actions with **`-a` / `--all`** → every config the tool has ever installed (every directory you've `apply`-ed from).
+
+```bash
+sudo ros2-systemd-manager update           # only this directory's config
+sudo ros2-systemd-manager update -a        # every tracked config
+sudo ros2-systemd-manager uninstall -a     # remove every tracked unit everywhere
+ros2-systemd-manager list --all            # print every tracked unit
+```
+
+> **Migration:** units tracked before this change have no recorded origin. They are left untouched by default `update`/`uninstall` (safe), and are still swept by `--all`. Origins are attached the next time you `apply`/`update` each config.
 
 ## ROS DDS Environment (`set`)
 
@@ -327,6 +346,26 @@ make <op>-<service>-<sfx>     # e.g., logs-<svc>-recent, status-<svc>-long (100 
 make uninstall                # uninstall all configured units
 make update                   # stop old + uninstall + install/start/enable + refresh mk
 make makefile                 # refresh generated mk only (no systemd changes)
+make list                     # print this config's unit names
+```
+
+`-all` targets act across **every tracked config** (every directory you have ever `apply`-ed from), via `ros2-systemd-manager list --all`:
+
+```bash
+make start-all                # systemctl start every tracked unit
+make stop-all                 # systemctl stop every tracked unit
+make restart-all              # systemctl restart every tracked unit
+make status-all               # systemctl status every tracked unit
+make status-all-long          # status with 100 log lines, every tracked unit
+make enable-all               # systemctl enable every tracked unit
+make disable-all              # systemctl disable every tracked unit
+make logs-all                 # follow logs for every tracked unit
+make logs-recent-all          # last 200 log lines for every tracked unit
+make install-all              # install every tracked config
+make apply-all                # apply every tracked config
+make update-all               # update every tracked config
+make uninstall-all            # uninstall every tracked unit everywhere
+make list --all               # print every tracked unit (one per line)
 ```
 
 Config behavior:

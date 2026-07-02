@@ -172,6 +172,20 @@ logs-{service_key}-recent:
             "logs-recent",
             "update",
             "makefile",
+            "list",
+            "start-all",
+            "stop-all",
+            "restart-all",
+            "status-all",
+            "status-all-long",
+            "enable-all",
+            "disable-all",
+            "logs-all",
+            "logs-recent-all",
+            "install-all",
+            "apply-all",
+            "uninstall-all",
+            "update-all",
             *per_service_targets,
         ]
     )
@@ -190,6 +204,10 @@ GENERATED_MK := $(lastword $(MAKEFILE_LIST))
 
 EFFECTIVE_SCRIPT := $(if $(strip $(SCRIPT)),$(SCRIPT),{script_default})
 EFFECTIVE_CONFIG := $(if $(strip $(CONFIG)),$(CONFIG),$(firstword $(wildcard ./ros2_services.yaml ./*.yaml)))
+
+# Every unit ever installed across all configs. Lazily expanded (the shell call
+# runs only when an *-all target references it). Used by the -all targets below.
+ALL_UNITS = $(shell $(EFFECTIVE_SCRIPT) list --all)
 
 .PHONY: {phony_targets}
 
@@ -211,6 +229,14 @@ help:
 	@echo \"  make uninstall              # uninstall all configured units\"
 	@echo \"  make update                 # stop old + uninstall removed + install/start/enable + refresh generated mk\"
 	@echo \"  make makefile               # refresh generated mk only (no systemd changes)\"
+	@echo \"\"
+	@echo \"  Across ALL tracked configs (every directory ever installed):\"
+	@echo \"  make list                   # print this config's units (list --all: every config)\"
+	@echo \"  make <op>-all               # op in start/stop/restart/status/enable/disable/logs\"
+	@echo \"  make install-all            # install every tracked config\"
+	@echo \"  make apply-all              # apply every tracked config\"
+	@echo \"  make update-all             # update every tracked config\"
+	@echo \"  make uninstall-all          # uninstall every tracked unit\"
 	@echo \"  make <target> CONFIG=./file.yaml  # override auto-discovered yaml\"
 
 ensure-config:
@@ -263,6 +289,51 @@ update: ensure-config
 
 makefile: ensure-config
 	$(EFFECTIVE_SCRIPT) makefile --config \"$(EFFECTIVE_CONFIG)\"
+
+list: ensure-config
+	$(EFFECTIVE_SCRIPT) list --config \"$(EFFECTIVE_CONFIG)\"
+
+# --- across ALL tracked configs (every directory ever installed) ---
+# These ignore CONFIG and act on every unit the tool has installed.
+
+start-all:
+	$(SUDO) systemctl start $(ALL_UNITS)
+
+stop-all:
+	$(SUDO) systemctl stop $(ALL_UNITS)
+
+restart-all:
+	$(SUDO) systemctl restart $(ALL_UNITS)
+
+status-all:
+	$(SUDO) systemctl status $(ALL_UNITS)
+
+status-all-long:
+	$(SUDO) systemctl status $(ALL_UNITS) --no-pager -l -n 100
+
+enable-all:
+	$(SUDO) systemctl enable $(ALL_UNITS)
+
+disable-all:
+	$(SUDO) systemctl disable $(ALL_UNITS)
+
+logs-all:
+	$(SUDO) journalctl $(addprefix -u ,$(ALL_UNITS)) -f
+
+logs-recent-all:
+	$(SUDO) journalctl $(addprefix -u ,$(ALL_UNITS)) -n 200 --no-pager
+
+install-all:
+	$(SUDO) $(EFFECTIVE_SCRIPT) install --all
+
+apply-all:
+	$(SUDO) $(EFFECTIVE_SCRIPT) apply --all
+
+uninstall-all:
+	$(SUDO) $(EFFECTIVE_SCRIPT) uninstall --all
+
+update-all:
+	$(SUDO) $(EFFECTIVE_SCRIPT) update --all
 
 {per_service_blocks_text}
 """

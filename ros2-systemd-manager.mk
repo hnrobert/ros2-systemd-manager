@@ -11,7 +11,11 @@ GENERATED_MK := $(lastword $(MAKEFILE_LIST))
 EFFECTIVE_SCRIPT := $(if $(strip $(SCRIPT)),$(SCRIPT),ros2-systemd-manager)
 EFFECTIVE_CONFIG := $(if $(strip $(CONFIG)),$(CONFIG),$(firstword $(wildcard ./ros2_services.yaml ./*.yaml)))
 
-.PHONY: help upgrade ensure-config install apply uninstall start stop restart status status-long enable disable logs logs-recent update makefile start-ros2-foxglove-bridge stop-ros2-foxglove-bridge restart-ros2-foxglove-bridge status-ros2-foxglove-bridge status-ros2-foxglove-bridge-long enable-ros2-foxglove-bridge disable-ros2-foxglove-bridge logs-ros2-foxglove-bridge logs-ros2-foxglove-bridge-recent start-ros2-soem-bringup stop-ros2-soem-bringup restart-ros2-soem-bringup status-ros2-soem-bringup status-ros2-soem-bringup-long enable-ros2-soem-bringup disable-ros2-soem-bringup logs-ros2-soem-bringup logs-ros2-soem-bringup-recent start-ros2-infantry-chassis stop-ros2-infantry-chassis restart-ros2-infantry-chassis status-ros2-infantry-chassis status-ros2-infantry-chassis-long enable-ros2-infantry-chassis disable-ros2-infantry-chassis logs-ros2-infantry-chassis logs-ros2-infantry-chassis-recent start-ros2-sp-vision-autoaim stop-ros2-sp-vision-autoaim restart-ros2-sp-vision-autoaim status-ros2-sp-vision-autoaim status-ros2-sp-vision-autoaim-long enable-ros2-sp-vision-autoaim disable-ros2-sp-vision-autoaim logs-ros2-sp-vision-autoaim logs-ros2-sp-vision-autoaim-recent
+# Every unit ever installed across all configs. Lazily expanded (the shell call
+# runs only when an *-all target references it). Used by the -all targets below.
+ALL_UNITS = $(shell $(EFFECTIVE_SCRIPT) list --all)
+
+.PHONY: help upgrade ensure-config install apply uninstall start stop restart status status-long enable disable logs logs-recent update makefile list start-all stop-all restart-all status-all status-all-long enable-all disable-all logs-all logs-recent-all install-all apply-all uninstall-all update-all start-ros2-foxglove-bridge stop-ros2-foxglove-bridge restart-ros2-foxglove-bridge status-ros2-foxglove-bridge status-ros2-foxglove-bridge-long enable-ros2-foxglove-bridge disable-ros2-foxglove-bridge logs-ros2-foxglove-bridge logs-ros2-foxglove-bridge-recent start-ros2-soem-bringup stop-ros2-soem-bringup restart-ros2-soem-bringup status-ros2-soem-bringup status-ros2-soem-bringup-long enable-ros2-soem-bringup disable-ros2-soem-bringup logs-ros2-soem-bringup logs-ros2-soem-bringup-recent start-ros2-infantry-chassis stop-ros2-infantry-chassis restart-ros2-infantry-chassis status-ros2-infantry-chassis status-ros2-infantry-chassis-long enable-ros2-infantry-chassis disable-ros2-infantry-chassis logs-ros2-infantry-chassis logs-ros2-infantry-chassis-recent start-ros2-sp-vision-autoaim stop-ros2-sp-vision-autoaim restart-ros2-sp-vision-autoaim status-ros2-sp-vision-autoaim status-ros2-sp-vision-autoaim-long enable-ros2-sp-vision-autoaim disable-ros2-sp-vision-autoaim logs-ros2-sp-vision-autoaim logs-ros2-sp-vision-autoaim-recent
 
 help:
 	@echo "Targets:"
@@ -31,6 +35,14 @@ help:
 	@echo "  make uninstall              # uninstall all configured units"
 	@echo "  make update                 # stop old + uninstall removed + install/start/enable + refresh generated mk"
 	@echo "  make makefile               # refresh generated mk only (no systemd changes)"
+	@echo ""
+	@echo "  Across ALL tracked configs (every directory ever installed):"
+	@echo "  make list                   # print this config's units (list --all: every config)"
+	@echo "  make <op>-all               # op in start/stop/restart/status/enable/disable/logs"
+	@echo "  make install-all            # install every tracked config"
+	@echo "  make apply-all              # apply every tracked config"
+	@echo "  make update-all             # update every tracked config"
+	@echo "  make uninstall-all          # uninstall every tracked unit"
 	@echo "  make <target> CONFIG=./file.yaml  # override auto-discovered yaml"
 
 ensure-config:
@@ -83,6 +95,51 @@ update: ensure-config
 
 makefile: ensure-config
 	$(EFFECTIVE_SCRIPT) makefile --config "$(EFFECTIVE_CONFIG)"
+
+list: ensure-config
+	$(EFFECTIVE_SCRIPT) list --config "$(EFFECTIVE_CONFIG)"
+
+# --- across ALL tracked configs (every directory ever installed) ---
+# These ignore CONFIG and act on every unit the tool has installed.
+
+start-all:
+	$(SUDO) systemctl start $(ALL_UNITS)
+
+stop-all:
+	$(SUDO) systemctl stop $(ALL_UNITS)
+
+restart-all:
+	$(SUDO) systemctl restart $(ALL_UNITS)
+
+status-all:
+	$(SUDO) systemctl status $(ALL_UNITS)
+
+status-all-long:
+	$(SUDO) systemctl status $(ALL_UNITS) --no-pager -l -n 100
+
+enable-all:
+	$(SUDO) systemctl enable $(ALL_UNITS)
+
+disable-all:
+	$(SUDO) systemctl disable $(ALL_UNITS)
+
+logs-all:
+	$(SUDO) journalctl $(addprefix -u ,$(ALL_UNITS)) -f
+
+logs-recent-all:
+	$(SUDO) journalctl $(addprefix -u ,$(ALL_UNITS)) -n 200 --no-pager
+
+install-all:
+	$(SUDO) $(EFFECTIVE_SCRIPT) install --all
+
+apply-all:
+	$(SUDO) $(EFFECTIVE_SCRIPT) apply --all
+
+uninstall-all:
+	$(SUDO) $(EFFECTIVE_SCRIPT) uninstall --all
+
+update-all:
+	$(SUDO) $(EFFECTIVE_SCRIPT) update --all
 
 
 start-ros2-foxglove-bridge:

@@ -5,8 +5,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .runtime import err, log, run_cmd
-from .version_control import (check_and_prompt_for_modifications,
-                              record_uninstall, record_update)
+from .version_control import (all_tracked_units, check_and_prompt_for_modifications,
+                              record_uninstall, record_update,
+                              tracked_units_for_config)
 
 
 def _resolve_setup_scripts(
@@ -104,7 +105,7 @@ def validate_workspace_for_install(
             sys.exit(1)
 
 
-def install_only(config: Dict[str, Any], workspace_keys: List[str]) -> tuple:
+def install_only(config: Dict[str, Any], workspace_keys: List[str], config_path: str = "") -> tuple:
     """Install unit files only, without starting or enabling them.
 
     Returns (all_unit_names, enabled_unit_names).
@@ -181,7 +182,7 @@ def install_only(config: Dict[str, Any], workspace_keys: List[str]) -> tuple:
             unit_file.write_text(unit_content, encoding="utf-8")
             os.chmod(unit_file, 0o644)
 
-            record_update(unit_name, unit_content)
+            record_update(unit_name, unit_content, config_path)
 
             unit_names.append(unit_name)
             if enable:
@@ -194,9 +195,9 @@ def install_only(config: Dict[str, Any], workspace_keys: List[str]) -> tuple:
     return unit_names, enabled_unit_names
 
 
-def install_start_enable(config: Dict[str, Any], workspace_keys: List[str]) -> None:
+def install_start_enable(config: Dict[str, Any], workspace_keys: List[str], config_path: str = "") -> None:
     """Install services, then start and enable them (respecting per-service enable flag)."""
-    unit_names, enabled_unit_names = install_only(config, workspace_keys)
+    unit_names, enabled_unit_names = install_only(config, workspace_keys, config_path)
 
     not_enabled = [u for u in unit_names if u not in enabled_unit_names]
 
@@ -263,20 +264,19 @@ def remove_units(unit_dir: Path, unit_names: List[str]) -> None:
     subprocess.run(["systemctl", "reset-failed"], check=False)
 
 
-def sync_update(config: Dict[str, Any], workspace_keys: List[str]) -> None:
-    """Stop old units, remove stale units, then install/start/enable current units."""
-    from .version_control import PREVIOUS_UPDATE_DIR
-    
+def sync_update(config: Dict[str, Any], workspace_keys: List[str], config_path: str = "") -> None:
+    """Stop old units, remove stale units, then install/start/enable current units.
+
+    Stale cleanup is scoped to units previously installed by THIS config (matched
+    via the .origin sidecar), so updating one ros2_services.yaml never removes
+    units that belong to another directory's config.
+    """
     systemd_cfg = config["systemd"]
     unit_dir = Path(systemd_cfg.get("unit_dir", "/etc/systemd/system"))
 
     current_units = get_workspace_unit_names(config, workspace_keys)
-    
-    previous_units = []
-    if PREVIOUS_UPDATE_DIR.exists():
-        for f in PREVIOUS_UPDATE_DIR.iterdir():
-            if f.is_file() and not f.name.endswith(".md5"):
-                previous_units.append(f.name)
+
+    previous_units = tracked_units_for_config(config_path)
 
     if previous_units:
         log(f"Stopping previous units before update: {' '.join(previous_units)}")
@@ -286,9 +286,9 @@ def sync_update(config: Dict[str, Any], workspace_keys: List[str]) -> None:
     if stale_units:
         remove_units(unit_dir, stale_units)
     else:
-        log("No stale units detected from previous tracking directory.")
+        log("No stale units detected for this config.")
 
-    install_start_enable(config, workspace_keys)
+    install_start_enable(config, workspace_keys, config_path)
 
 
 def uninstall(config: Dict[str, Any], workspace_keys: List[str]) -> None:
@@ -322,3 +322,19 @@ def uninstall(config: Dict[str, Any], workspace_keys: List[str]) -> None:
     run_cmd(["systemctl", "daemon-reload"])
     subprocess.run(["systemctl", "reset-failed"], check=False)
     log("Uninstall completed.")
+
+
+def uninstall_all(unit_dir: Path) -> None:
+    """Uninstall every tracked unit across ALL configs (used by --all).
+
+    Operates purely on tracked unit names, so it does not need to load any
+    ros2_services.yaml. ``unit_dir`` is the systemd unit directory to clear.
+    """
+    unit_names = all_tracked_units()
+    if not unit_names:
+        log("No tracked units to uninstall.")
+        return
+
+    log(f"Uninstalling ALL tracked units across configs: {' '.join(unit_names)}")
+    remove_units(unit_dir, unit_names)
+    log("Uninstall-all completed.")
