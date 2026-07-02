@@ -1,5 +1,6 @@
 {
     "cSpell.words": [
+        "anymore",
         "autoaim",
         "behavior",
         "bringup",
@@ -23,6 +24,7 @@
         "soem",
         "tofile",
         "vars",
+        "venv",
         "writable"
     ],
     "python.analysis.extraPaths": [

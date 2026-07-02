@@ -20,6 +20,7 @@ If you've ever lost a robot stack to a reboot, juggled a dozen terminal tabs, or
 ## Highlights
 
 - **One YAML, many services** — workspaces, dependencies, capabilities, CPU affinity, per-service users, all declarative.
+- **Easy to use** — for example, `init` scaffolds a config + Makefile, `apply` deploys it, and `set` aligns your shell's DDS environment with your services; the generated Makefile gives you `make <op>-<service>` for every service, and `make <op>-all` for every tracked config.
 - **Reconcile, don't replace** — `update` stops old units, removes stale ones, and brings the current set online — scoped to the current directory so you never nuke a *different* project's services.
 - **Multi-project friendly** — keep a separate `ros2_services.yaml` per project directory; `--all` reaches across all of them when you really mean it.
 - **Safe by default** — MD5-tracked unit files, manual-edit detection with diffing + archiving, and a confirmation prompt before overwriting anything you touched by hand.
@@ -36,6 +37,7 @@ If you've ever lost a robot stack to a reboot, juggled a dozen terminal tabs, or
     - [Action reference](#action-reference)
     - [Scoping: current directory vs. `--all`](#scoping-current-directory-vs---all)
   - [ROS DDS Environment (`set`)](#ros-dds-environment-set)
+    - [When to use it](#when-to-use-it)
     - [What gets written](#what-gets-written)
     - [Files touched \& safety](#files-touched--safety)
   - [Init](#init)
@@ -50,6 +52,13 @@ If you've ever lost a robot stack to a reboot, juggled a dozen terminal tabs, or
   - [Generated Makefile](#generated-makefile)
   - [File tracking \& safety](#file-tracking--safety)
     - [General safety](#general-safety)
+  - [FAQ](#faq)
+    - [Foxglove shows topics, but `ros2 topic list` doesn't](#foxglove-shows-topics-but-ros2-topic-list-doesnt)
+    - [I ran `set`, but `ros2 topic list` is still empty](#i-ran-set-but-ros2-topic-list-is-still-empty)
+    - [Does `update` or `uninstall` touch my *other* projects?](#does-update-or-uninstall-touch-my-other-projects)
+    - [How do I run an action across every project at once?](#how-do-i-run-an-action-across-every-project-at-once)
+    - [Where does the tool store its data?](#where-does-the-tool-store-its-data)
+    - [A root-owned rc/profile file appeared in my home after a `sudo` run](#a-root-owned-rcprofile-file-appeared-in-my-home-after-a-sudo-run)
   - [Contributing](#contributing)
 
 ## Quick start
@@ -136,21 +145,9 @@ A focused helper that writes (or updates) the ROS DDS variables into **all** rel
 - `RMW_IMPLEMENTATION` (resolved from `-r`: `cyclonedds` → `rmw_cyclonedds_cpp`, `fastrtps` → `rmw_fastrtps_cpp`; full `rmw_*_cpp` names pass through)
 - `ROS_LOCALHOST_ONLY`
 
-### When to use it — the “Foxglove sees topics, `ros2 topic list` doesn’t” problem
+### When to use it
 
-A classic ROS 2 symptom: **Foxglove shows topic data just fine, but `ros2 topic list` in your terminal is empty or missing topics.** This is almost always a DDS environment mismatch.
-
-Your systemd services run with a specific DDS configuration — a given `ROS_DOMAIN_ID`, `RMW_IMPLEMENTATION`, and `ROS_LOCALHOST_ONLY`. Foxglove Studio reaches the data *through the Foxglove Bridge service*, so it sees whatever the bridge sees, regardless of your terminal. But your **interactive shell** uses its *own* DDS settings. If those differ from the services', your `ros2` CLI ends up on a different DDS domain/participant than your stack — so topics look missing, even though they're plainly there in Foxglove.
-
-`set` fixes it in one shot by stamping the same DDS environment into your shell profiles, so every **new** terminal agrees with your services:
-
-```bash
-sudo ros2-systemd-manager set -d 42     # match the domain your services use
-# then open a NEW terminal (or `source ~/.bashrc`) and:
-ros2 topic list                         # now sees the same topics as Foxglove ✅
-```
-
-> **Match your services.** Use the same `ROS_DOMAIN_ID` as your workspace's `ros_domain_id`, the RMW your stack was built against, and a `ROS_LOCALHOST_ONLY` consistent with whether you need multi-machine discovery. `set` edits rc/profile files, so it only affects **new** shells — re-source or open a fresh terminal for it to take effect.
+`set` solves the classic "Foxglove shows topics but `ros2 topic list` doesn't" mismatch by aligning your interactive shell's DDS environment with your services'. See the [FAQ](#faq) for the full explanation and one-command fix.
 
 ### What gets written
 
@@ -408,6 +405,56 @@ sudo ros2-systemd-manager apply --workspace-key default_ws   # single workspace
 - Use trusted launch commands only.
 - Validate workspace paths and setup scripts before `apply`/`update`.
 - Prefer `install` first for brand-new services.
+
+## FAQ
+
+### Foxglove shows topics, but `ros2 topic list` doesn't
+
+A classic ROS 2 symptom, and the main reason `set` exists. It's almost always a **DDS environment mismatch**:
+
+- Your systemd services run with a specific `ROS_DOMAIN_ID` / `RMW_IMPLEMENTATION` / `ROS_LOCALHOST_ONLY`.
+- **Foxglove Studio** reaches the data *through the Foxglove Bridge service*, so it sees whatever the bridge sees — regardless of your terminal's settings.
+- Your **interactive shell** uses its *own* DDS settings. If those differ from the services', your `ros2` CLI ends up on a different DDS domain/participant than your stack, so topics look missing even though they're plainly visible in Foxglove.
+
+`set` aligns your shell with your services in one shot:
+
+```bash
+sudo ros2-systemd-manager set -d 42     # match the domain your services use
+ros2 topic list                         # ← run this in a NEW terminal afterwards
+```
+
+Use the same `ROS_DOMAIN_ID` as your workspace's `ros_domain_id`, the RMW your stack was built against, and a `ROS_LOCALHOST_ONLY` consistent with your discovery needs.
+
+### I ran `set`, but `ros2 topic list` is still empty
+
+`set` writes to rc/profile files, which only affects **new** shells. Open a fresh terminal or run `source ~/.bashrc` (and `source ~/.profile` for login shells) so the new DDS variables are loaded. Preview first with `set --dry-run` to confirm which files were touched.
+
+### Does `update` or `uninstall` touch my *other* projects?
+
+No — by default every action is scoped to the **current directory's** `ros2_services.yaml`. The tool records which config installed each unit (an `.origin` sidecar), so `update` only removes stale units that *this* config owned. Other directories' units are never touched unless you explicitly pass `-a`/`--all`.
+
+### How do I run an action across every project at once?
+
+Add `-a`/`--all` — it operates on every config the tool has ever installed:
+
+```bash
+sudo ros2-systemd-manager apply -a       # apply every tracked project
+sudo ros2-systemd-manager update -a      # reconcile every tracked project
+sudo ros2-systemd-manager uninstall -a   # remove every tracked unit everywhere
+ros2-systemd-manager list --all          # see everything the tool manages
+```
+
+The generated Makefile offers the same as `make apply-all`, `make update-all`, `make uninstall-all`, etc.
+
+### Where does the tool store its data?
+
+- **Unit files**: `/etc/systemd/system/<unit_name>` (configurable via `systemd.unit_dir`).
+- **Tracking store**: `~/.config/ros2-systemd-manager/previous-update/` — a copy of each deployed unit, its MD5, and the `.origin` config tag.
+- **Archived manual edits**: `~/.config/ros2-systemd-manager/archive/`.
+
+### A root-owned rc/profile file appeared in my home after a `sudo` run
+
+That shouldn't happen anymore — after writing, each rc/profile file is `chown`ed to match its parent (home) directory's owner, so a `sudo` run never leaves a file you can't read or edit. If you have a leftover root-owned file from an older version, re-running `set` will fix its ownership.
 
 ## Contributing
 
