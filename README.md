@@ -46,6 +46,7 @@ If you've ever lost a robot stack to a reboot, juggled a dozen terminal tabs, or
     - [`runtime` — defaults shared by all services (unless overridden per service)](#runtime--defaults-shared-by-all-services-unless-overridden-per-service)
     - [`workspaces` — a mapping of workspace keys (selectable via `--workspace-key`)](#workspaces--a-mapping-of-workspace-keys-selectable-via---workspace-key)
     - [Service entries (`workspaces.<key>.services[]`)](#service-entries-workspaceskeyservices)
+      - [On-demand \& keep-running services](#on-demand--keep-running-services)
     - [`makefile`](#makefile)
     - [Example YAML configuration](#example-yaml-configuration)
     - [Generated unit structure](#generated-unit-structure)
@@ -57,6 +58,7 @@ If you've ever lost a robot stack to a reboot, juggled a dozen terminal tabs, or
     - [I ran `set`, but `ros2 topic list` is still empty](#i-ran-set-but-ros2-topic-list-is-still-empty)
     - [Does `update` or `uninstall` touch my *other* projects?](#does-update-or-uninstall-touch-my-other-projects)
     - [How do I run an action across every project at once?](#how-do-i-run-an-action-across-every-project-at-once)
+    - [How do I keep a service running when I stop the rest?](#how-do-i-keep-a-service-running-when-i-stop-the-rest)
     - [Where does the tool store its data?](#where-does-the-tool-store-its-data)
     - [A root-owned rc/profile file appeared in my home after a `sudo` run](#a-root-owned-rcprofile-file-appeared-in-my-home-after-a-sudo-run)
   - [Contributing](#contributing)
@@ -259,14 +261,14 @@ Generates:
 | `use_root` | no | `false` | When `true`, force this service to run as `root` with `HOME=/root`. |
 | `enable` | no | `true` | When `false`, the service starts but isn't enabled on boot. |
 | `explicit_start` | no | `false` | When `true`, the service is **installed** but **not** auto-started/enabled by `apply`, `make start`/`enable`/`restart`. Start it on demand (`make start-<svc>`) or include it with `-a`/`--all`. |
-| `explicit_stop` | no | `false` | When `true`, the service is **not** auto-stopped/disabled/removed by `make stop`/`disable`, `uninstall`, or `update`'s stop-previous. Keeps critical services running. Override with `-a`/`--all`. |
+| `explicit_stop` | no | `false` | Guards a long-running service: excluded from `make stop`/`disable`, `uninstall`, and `update`'s stop-previous, and during `apply`/`update` left running **unless its config changed** — then you're prompted to reinstall/restart it (default yes). `-f` skips the prompt; `-a` forces inclusion. |
 
 #### On-demand & keep-running services
 
 Two independent guards let a service opt out of the default group lifecycle:
 
 - **`explicit_start: true`** — "start this on demand." The unit is still installed (so `make start-<svc>` / `systemctl start` work), but `apply` and `make start`/`enable`/`restart` skip it. Bring it up with `make start-ros2-foxglove-bridge`, or include it via `-a`/`--all`.
-- **`explicit_stop: true`** — "keep this running." `make stop`/`disable`, `uninstall`, and `update`'s stop-previous skip it, so a critical service survives stopping/restarting the rest of the stack.
+- **`explicit_stop: true`** — "keep this running." `make stop`/`disable`, `uninstall`, and `update`'s stop-previous skip it. During `apply`/`update`, it's left running **unless its config changed** — in which case you're asked to confirm the reinstall/restart (default yes; `-f` skips the prompt; `-a` forces it).
 
 Both are overridden by `-a`/`--all`, and they compose with `enable` and `-g`/`--global` (e.g. `apply -g -a` starts on-demand services across every project).
 
@@ -285,6 +287,8 @@ systemd:
   wanted_by: multi-user.target
 
 runtime:
+  # Default runtime identity for services when use_root is omitted or false.
+  # Set service.use_root: true to force that specific service to run as root.
   user: user
   group: user
   home: /home/user
@@ -296,46 +300,62 @@ workspaces:
   default_ws: # Workspace key, selectable via --workspace-key
     path: /home/user/default_ws
     setup_script: install/setup.bash
-    # ros_domain_id: 0 # Optional: isolate DDS traffic per workspace
+    # setup_scripts: # Optional: use instead of setup_script to source multiple scripts in order
+    #   - /opt/ros/humble/setup.bash
+    #   - install/setup.bash
+    # ros_domain_id: 0 # Optional: set ROS_DOMAIN_ID to isolate DDS traffic for this workspace
     services:
+      # Example of a service that:
+      #  - is guarded by explicit_stop: not auto-stopped/removed, and only reinstalled/restarted on config change
       - unit_name: ros2-foxglove-bridge.service
         description: ROS2 Foxglove Bridge
-        use_root: false # Optional: default false. When true, force this service to run as root.
-        enable: true # Optional: default true. Set false to start without auto-start on boot.
+        explicit_stop: true # Optional: default false. Guards a long-running service. It is excluded from default
+                            # `make stop`/`disable`, `uninstall`, and `update`'s stop-previous. During `apply`/`update`
+                            # it is LEFT RUNNING unless its config changed — then you're asked to reinstall/restart it
+                            # (default yes; `-f` skips the prompt; `-a/--all` forces inclusion).
+                            # Stop/restart it on demand via `make stop-ros2-foxglove-bridge` / `make restart-...`.
         launch_command: ros2 launch foxglove_bridge foxglove_bridge_launch.xml
 
+      # Example of a service that:
+      #  - Requires specific capabilities (CAP_NET_RAW, CAP_NET_ADMIN) to run without root
       - unit_name: ros2-soem-bringup.service
         description: ROS2 Simple Open EtherCAT Master Bringup (https://github.com/AIMEtherCAT/EcatV2_Master)
-        use_root: false
-        service_options: # Grant capabilities without running as root
+        use_root: false # Optional: default false. When true, force this service to run as root.
+        service_options: # Example of granting specific capabilities to a service without running as root
           - CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
           - AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
         launch_command: ros2 launch soem_bringup bringup.launch.py
 
+      # Example of a service that:
+      #  - Depends on another service (ros2-soem-bringup.service)
+      #  - May perform dangerous operations (e.g. motor control) and
+      #  - should not be auto-started on boot (enable: false) and
+      #  - should not be started with other services by default (explicit_start: true)
       - unit_name: ros2-infantry-chassis.service
         description: ROS2 Infantry Chassis Controller
         depends_on:
           - ros2-soem-bringup.service
+        explicit_start: true # Optional: default false. When true, this service is NOT auto-started by
+                             # apply / make start / make enable / make restart — start it on demand via
+                             # `make start-ros2-infantry-chassis`, or include the generally commands with `-a/--all`.
+                             # Note: explicit_start does NOT prevent auto-start on boot if enable: true.
+        enable: false # Optional: default true. Start on demand, do not auto-start on boot
         launch_command: ros2 launch infantry_controller infantry_chassis.launch.py
 
+      # Example of a service that uses CPU affinity to restrict which cores it can run on.
       - unit_name: ros2-sp-vision-autoaim.service
         description: TongjiSuperPower/sp_vision_25 Auto Aim (via self defined sp_vision_launch)
-        enable: false # Start on demand, do not auto-start on boot
         service_options:
-          - CPUAffinity=1 2 3 # Pin to specific cores
+          - CPUAffinity=1 2 3 # Example of setting CPU affinity for a service
         launch_command: ros2 launch sp_vision_launch sp_vision.launch.py config:=sentry.yaml
 
-  # Multi-source example with domain isolation:
+  # You can define additional workspaces with their own services here, e.g.:
   # another_ws:
-  #   path: /home/user/another_ws
-  #   ros_domain_id: 42
-  #   setup_scripts:
-  #     - /opt/ros/humble/setup.bash
-  #     - install/setup.bash
-  #   services:
-  #     - unit_name: ros2-another.service
-  #       description: Another workspace service
-  #       launch_command: ros2 run pkg node
+  #   path: ...
+  #   ros_domain_id: 42 # Isolate this workspace on DDS domain 42
+  #   setup_script: install/setup.bash
+  #   ...
+
 ```
 
 This demonstrates: `systemd` placement, shared `runtime` defaults, multiple `workspaces`, `depends_on` ordering, `service_options` for capabilities/CPU affinity, `enable: false`, `ros_domain_id` DDS isolation, and multi-source `setup_scripts`.
@@ -469,7 +489,7 @@ The generated Makefile offers the same as `make apply-global`, `make update-glob
 
 ### How do I keep a service running when I stop the rest?
 
-Set `explicit_stop: true` on it. Then `make stop`/`disable`, `uninstall`, and `update`'s stop-previous all skip it, so it survives stopping or restarting the rest of the stack. To stop it anyway, target it directly (`make stop-<svc>`) or pass `-a`/`--all`. (The mirror option `explicit_start: true` does the same for starting — useful for on-demand services like Foxglove.)
+Set `explicit_stop: true` on it. Then `make stop`/`disable`, `uninstall`, and `update`'s stop-previous all skip it, so it survives stopping or restarting the rest of the stack. During `apply`/`update`, it's also left running **unless its config changed** — if it did, you'll be asked to confirm the reinstall/restart (default yes; `-f` skips the prompt; `-a` forces it). To stop it anyway, target it directly (`make stop-<svc>`) or pass `-a`/`--all`. (The mirror option `explicit_start: true` does the same for starting — useful for on-demand services like Foxglove.)
 
 ### Where does the tool store its data?
 
