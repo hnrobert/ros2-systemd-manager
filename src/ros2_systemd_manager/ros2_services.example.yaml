@@ -12,8 +12,9 @@
 # 7) services can set explicit_start: true to EXCLUDE them from default start/enable/restart
 #    (apply, make start/enable/restart). They are still installed (unit file written) but only
 #    started when explicitly targeted or via -a/--all. Useful for on-demand services (e.g. Foxglove).
-# 8) services can set explicit_stop: true to EXCLUDE them from default stop/disable/uninstall
-#    (and update's stop-previous). Useful for critical services that must keep running.
+# 8) services can set explicit_stop: true to GUARD a long-running service. It is excluded from
+#    default stop/disable/uninstall (and update's stop-previous), and during apply/update it is left
+#    running unless its config changed — then you're prompted to reinstall/restart it (-f skips).
 # 9) workspaces can set ros_domain_id to isolate DDS traffic per workspace
 # 10) workspaces can use setup_scripts (list) instead of setup_script for multi-source
 # 11) use 'sudo ros2-systemd-manager set [-d [N]] [-r [cyclonedds|fastrtps]] [-l [0|1]]' to write the
@@ -68,32 +69,46 @@ workspaces:
     #   - install/setup.bash
     # ros_domain_id: 0 # Optional: set ROS_DOMAIN_ID to isolate DDS traffic for this workspace
     services:
+      # Example of a service that:
+      #  - is guarded by explicit_stop: not auto-stopped/removed, and only reinstalled/restarted on config change
       - unit_name: ros2-foxglove-bridge.service
         description: ROS2 Foxglove Bridge
-        use_root: false # Optional: default false. When true, force this service to run as root.
-        explicit_start: true # Optional: default false. When true, this service is NOT auto-started by
-                             # apply / make start / make enable / make restart — start it on demand via
-                             # `make start-ros2-foxglove-bridge`, or include it with `-a/--all`.
-        enable: true # Optional: default true. Set false to start without auto-start on boot.
+        explicit_stop: true # Optional: default false. Guards a long-running service. It is excluded from default
+                            # `make stop`/`disable`, `uninstall`, and `update`'s stop-previous. During `apply`/`update`
+                            # it is LEFT RUNNING unless its config changed — then you're asked to reinstall/restart it
+                            # (default yes; `-f` skips the prompt; `-a/--all` forces inclusion).
+                            # Stop/restart it on demand via `make stop-ros2-foxglove-bridge` / `make restart-...`.
         launch_command: ros2 launch foxglove_bridge foxglove_bridge_launch.xml
 
+      # Example of a service that:
+      #  - Requires specific capabilities (CAP_NET_RAW, CAP_NET_ADMIN) to run without root
       - unit_name: ros2-soem-bringup.service
         description: ROS2 Simple Open EtherCAT Master Bringup (https://github.com/AIMEtherCAT/EcatV2_Master)
-        use_root: false
+        use_root: false # Optional: default false. When true, force this service to run as root.
         service_options: # Example of granting specific capabilities to a service without running as root
           - CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
           - AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
         launch_command: ros2 launch soem_bringup bringup.launch.py
 
+      # Example of a service that:
+      #  - Depends on another service (ros2-soem-bringup.service)
+      #  - May perform dangerous operations (e.g. motor control) and
+      #  - should not be auto-started on boot (enable: false) and
+      #  - should not be started with other services by default (explicit_start: true)
       - unit_name: ros2-infantry-chassis.service
         description: ROS2 Infantry Chassis Controller
         depends_on:
           - ros2-soem-bringup.service
+        explicit_start: true # Optional: default false. When true, this service is NOT auto-started by
+                             # apply / make start / make enable / make restart — start it on demand via
+                             # `make start-ros2-infantry-chassis`, or include the generally commands with `-a/--all`.
+                             # Note: explicit_start does NOT prevent auto-start on boot if enable: true.
+        enable: false # Optional: default true. Start on demand, do not auto-start on boot
         launch_command: ros2 launch infantry_controller infantry_chassis.launch.py
 
+      # Example of a service that uses CPU affinity to restrict which cores it can run on.
       - unit_name: ros2-sp-vision-autoaim.service
         description: TongjiSuperPower/sp_vision_25 Auto Aim (via self defined sp_vision_launch)
-        enable: false # Example: start on demand, do not auto-start on boot
         service_options:
           - CPUAffinity=1 2 3 # Example of setting CPU affinity for a service
         launch_command: ros2 launch sp_vision_launch sp_vision.launch.py config:=sentry.yaml

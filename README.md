@@ -259,14 +259,14 @@ Generates:
 | `use_root` | no | `false` | When `true`, force this service to run as `root` with `HOME=/root`. |
 | `enable` | no | `true` | When `false`, the service starts but isn't enabled on boot. |
 | `explicit_start` | no | `false` | When `true`, the service is **installed** but **not** auto-started/enabled by `apply`, `make start`/`enable`/`restart`. Start it on demand (`make start-<svc>`) or include it with `-a`/`--all`. |
-| `explicit_stop` | no | `false` | When `true`, the service is **not** auto-stopped/disabled/removed by `make stop`/`disable`, `uninstall`, or `update`'s stop-previous. Keeps critical services running. Override with `-a`/`--all`. |
+| `explicit_stop` | no | `false` | Guards a long-running service: excluded from `make stop`/`disable`, `uninstall`, and `update`'s stop-previous, and during `apply`/`update` left running **unless its config changed** — then you're prompted to reinstall/restart it (default yes). `-f` skips the prompt; `-a` forces inclusion. |
 
 #### On-demand & keep-running services
 
 Two independent guards let a service opt out of the default group lifecycle:
 
 - **`explicit_start: true`** — "start this on demand." The unit is still installed (so `make start-<svc>` / `systemctl start` work), but `apply` and `make start`/`enable`/`restart` skip it. Bring it up with `make start-ros2-foxglove-bridge`, or include it via `-a`/`--all`.
-- **`explicit_stop: true`** — "keep this running." `make stop`/`disable`, `uninstall`, and `update`'s stop-previous skip it, so a critical service survives stopping/restarting the rest of the stack.
+- **`explicit_stop: true`** — "keep this running." `make stop`/`disable`, `uninstall`, and `update`'s stop-previous skip it. During `apply`/`update`, it's left running **unless its config changed** — in which case you're asked to confirm the reinstall/restart (default yes; `-f` skips the prompt; `-a` forces it).
 
 Both are overridden by `-a`/`--all`, and they compose with `enable` and `-g`/`--global` (e.g. `apply -g -a` starts on-demand services across every project).
 
@@ -469,7 +469,7 @@ The generated Makefile offers the same as `make apply-global`, `make update-glob
 
 ### How do I keep a service running when I stop the rest?
 
-Set `explicit_stop: true` on it. Then `make stop`/`disable`, `uninstall`, and `update`'s stop-previous all skip it, so it survives stopping or restarting the rest of the stack. To stop it anyway, target it directly (`make stop-<svc>`) or pass `-a`/`--all`. (The mirror option `explicit_start: true` does the same for starting — useful for on-demand services like Foxglove.)
+Set `explicit_stop: true` on it. Then `make stop`/`disable`, `uninstall`, and `update`'s stop-previous all skip it, so it survives stopping or restarting the rest of the stack. During `apply`/`update`, it's also left running **unless its config changed** — if it did, you'll be asked to confirm the reinstall/restart (default yes; `-f` skips the prompt; `-a` forces it). To stop it anyway, target it directly (`make stop-<svc>`) or pass `-a`/`--all`. (The mirror option `explicit_start: true` does the same for starting — useful for on-demand services like Foxglove.)
 
 ### Where does the tool store its data?
 

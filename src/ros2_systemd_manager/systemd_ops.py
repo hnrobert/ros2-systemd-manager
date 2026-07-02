@@ -105,13 +105,42 @@ def validate_workspace_for_install(
             sys.exit(1)
 
 
+def _should_reinstall_explicit_stop(unit_file: Path, new_content: str, unit_name: str, force: bool) -> bool:
+    """For explicit_stop services: decide whether to (re)install during apply/update.
+
+    - Not deployed yet           -> install (no prompt; nothing is running to disrupt).
+    - Deployed == new config     -> unchanged; leave it as-is (return False).
+    - Deployed differs (changed) -> prompt before reinstalling/restarting (default yes);
+      ``force`` skips the prompt (return True).
+    """
+    if not unit_file.is_file():
+        return True
+    try:
+        if unit_file.read_text(encoding="utf-8") == new_content:
+            log(f"{unit_name} (explicit_stop) unchanged — left as-is.")
+            return False
+    except OSError:
+        pass
+    if force:
+        log(f"{unit_name} (explicit_stop) config changed — reinstalling (--force).")
+        return True
+    print(f"\n[explicit_stop] {unit_name}: config has changed.")
+    while True:
+        choice = input("Reinstall/restart this service? [Y/n] ").strip().lower()
+        if choice in ("", "y", "yes"):
+            return True
+        if choice in ("n", "no"):
+            log(f"{unit_name} (explicit_stop) left as-is (declined).")
+            return False
+
+
 def install_only(config: Dict[str, Any], workspace_keys: List[str], config_path: str = "", include_explicit: bool = False, force: bool = False) -> tuple:
     """Install unit files only, without starting or enabling them.
 
     Every unit file is always written. A service is added to the start/enable
     sets only when `include_explicit` is set or the service is not explicit_start.
 
-    Returns (all_unit_names, enabled_unit_names, start_only_names).
+    Returns (all_unit_names, enabled_unit_names, start_only_names, restart_names).
     """
     systemd_cfg = config["systemd"]
     runtime_cfg = config["runtime"]
@@ -119,6 +148,7 @@ def install_only(config: Dict[str, Any], workspace_keys: List[str], config_path:
     enabled_unit_names: List[str] = []
     start_only_names: List[str] = []
     deferred_start: List[str] = []
+    restart_names: List[str] = []  # explicit_stop services reinstalled because their config changed
 
     unit_dir = Path(systemd_cfg.get("unit_dir", "/etc/systemd/system"))
     wanted_by = systemd_cfg.get("wanted_by", "multi-user.target")
@@ -149,6 +179,7 @@ def install_only(config: Dict[str, Any], workspace_keys: List[str], config_path:
             use_root = bool(svc.get("use_root", False))
             enable = bool(svc.get("enable", True))
             explicit_start = bool(svc.get("explicit_start", False))
+            explicit_stop = bool(svc.get("explicit_stop", False))
 
             if not isinstance(depends_on, list):
                 err(f"Service {unit_name} has invalid depends_on: expected a list.")
@@ -181,6 +212,15 @@ def install_only(config: Dict[str, Any], workspace_keys: List[str], config_path:
 
             unit_file = unit_dir / unit_name
 
+            # explicit_stop services: leave them running unless their config actually
+            # changed; if it did, prompt before reinstalling/restarting (-f skips, -a bypasses).
+            changed_explicit_stop = False
+            if explicit_stop and not include_explicit:
+                if not _should_reinstall_explicit_stop(unit_file, unit_content, unit_name, force):
+                    unit_names.append(unit_name)  # still listed for status/logs
+                    continue
+                changed_explicit_stop = True
+
             if not check_and_prompt_for_modifications(unit_file, unit_name, force=force):
                 err(f"Operation cancelled during processing of {unit_name}.")
                 sys.exit(1)
@@ -201,6 +241,10 @@ def install_only(config: Dict[str, Any], workspace_keys: List[str], config_path:
                 deferred_start.append(unit_name)
                 log(f"Written: {unit_file} (explicit_start: not started)")
 
+            if changed_explicit_stop:
+                # Reinstalled because its config changed -> restart so the change takes effect.
+                restart_names.append(unit_name)
+
     run_cmd(["systemctl", "daemon-reload"])
     log("systemd daemon-reload completed.")
     log("Install finished (not started, not enabled).")
@@ -209,12 +253,12 @@ def install_only(config: Dict[str, Any], workspace_keys: List[str], config_path:
             "explicit_start services installed but not started "
             f"(use -a/--all to start them): {', '.join(deferred_start)}"
         )
-    return unit_names, enabled_unit_names, start_only_names
+    return unit_names, enabled_unit_names, start_only_names, restart_names
 
 
 def install_start_enable(config: Dict[str, Any], workspace_keys: List[str], config_path: str = "", include_explicit: bool = False, force: bool = False) -> None:
     """Install services, then start and enable them (respecting explicit_start + enable)."""
-    unit_names, enabled_unit_names, start_only_names = install_only(
+    unit_names, enabled_unit_names, start_only_names, restart_names = install_only(
         config, workspace_keys, config_path,
         include_explicit=include_explicit, force=force,
     )
@@ -227,13 +271,18 @@ def install_start_enable(config: Dict[str, Any], workspace_keys: List[str], conf
         log(f"Starting without enable: {', '.join(start_only_names)}")
         run_cmd(["systemctl", "start", *start_only_names])
 
-    started = set(enabled_unit_names) | set(start_only_names)
+    if restart_names:
+        # explicit_stop services whose config changed (and were confirmed/forced) -> apply the change.
+        log(f"Restarting changed explicit_stop services: {', '.join(restart_names)}")
+        run_cmd(["systemctl", "restart", *restart_names])
+
+    started = set(enabled_unit_names) | set(start_only_names) | set(restart_names)
     not_started = [u for u in unit_names if u not in started]
     log("Completed: services are started.")
     if start_only_names:
         log(f"Note: {', '.join(start_only_names)} will NOT auto-start on boot (enable=false).")
     if not_started:
-        log(f"Note: {', '.join(not_started)} NOT started (explicit_start).")
+        log(f"Note: {', '.join(not_started)} NOT started (explicit_start, or explicit_stop left as-is).")
     log(f"Check status with: systemctl status {' '.join(unit_names)}")
 
 
@@ -401,21 +450,3 @@ def uninstall(config: Dict[str, Any], workspace_keys: List[str], include_explici
     run_cmd(["systemctl", "daemon-reload"])
     subprocess.run(["systemctl", "reset-failed"], check=False)
     log("Uninstall completed.")
-
-
-def uninstall_all(unit_dir: Path, force: bool = False) -> None:
-    """Uninstall every tracked unit across ALL configs (used by --global).
-
-    Operates purely on tracked unit names, so it does not need to load any
-    ros2_services.yaml. NOTE: this blunt path ignores explicit_stop (it clears
-    everything tracked); the per-config uninstall() respects explicit_stop.
-    ``unit_dir`` is the systemd unit directory to clear.
-    """
-    unit_names = all_tracked_units()
-    if not unit_names:
-        log("No tracked units to uninstall.")
-        return
-
-    log(f"Uninstalling ALL tracked units across configs: {' '.join(unit_names)}")
-    remove_units(unit_dir, unit_names, force=force)
-    log("Uninstall-global completed.")
