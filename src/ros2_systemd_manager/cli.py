@@ -8,7 +8,7 @@ from typing import List, Optional
 
 from .config import (get_help_text, load_yaml_config,
                      resolve_workspace_keys, validate_config)
-from .domain import resolve_rmw, set_ros_env
+from .domain import preview_ros_env, resolve_rmw, set_ros_env
 from .makefile_gen import write_makefile
 from .runtime import err, log, require_root
 from .scaffold import init_defaults
@@ -73,7 +73,8 @@ def get_help_text() -> str:
         "                        -r/--rmw [cyclonedds|fastrtps] (default cyclonedds)\n"
         "                        -l/--localhost-only [0|1]      (default 1)\n"
         "                      No options, or a bare flag (-d/-r/-l without a value), prompts for\n"
-        "                      confirmation before applying the default value(s).\n\n"
+        "                      confirmation before applying the default value(s).\n"
+        "                      Add -n/--dry-run to preview which files would change (no write).\n\n"
         "SCOPING:\n"
         "  By default install/apply/update/uninstall/list act on the CURRENT directory's\n"
         "  ros2_services.yaml only. Pass -a/--all to operate across every tracked config\n"
@@ -88,6 +89,7 @@ def get_help_text() -> str:
         "  sudo ros2-systemd-manager set -d 42                 # write only ROS_DOMAIN_ID=42\n"
         "  sudo ros2-systemd-manager set -d 42 -r fastrtps     # write domain 42 + Fast DDS only\n"
         "  sudo ros2-systemd-manager set                       # confirm, then write all defaults\n"
+        "  ros2-systemd-manager set -d 42 --dry-run            # preview files/lines, change nothing\n"
         "  ros2-systemd-manager list --all                     # print every tracked unit"
     )
 
@@ -156,6 +158,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Operate across ALL tracked configs/units (every directory ever installed), "
              "not just the current one. Applies to install/apply/update/uninstall/list.",
+    )
+    parser.add_argument(
+        "-n", "--dry-run",
+        action="store_true",
+        help="With 'set': list the rc/profile files that would be changed (and the lines "
+             "that would be written) without modifying anything. Does not require root.",
     )
     return parser.parse_args()
 
@@ -230,6 +238,10 @@ def _run_set(args: argparse.Namespace) -> None:
                 if localhost not in (0, 1):
                     err(f"Invalid --localhost-only: {localhost} (must be 0 or 1)")
                     sys.exit(1)
+
+    if getattr(args, "dry_run", False):
+        preview_ros_env(domain_id=domain, rmw=rmw, localhost_only=localhost)
+        return
 
     if confirm_items:
         header = (
@@ -322,7 +334,8 @@ def run() -> None:
         return
 
     if action_arg == "set":
-        require_root()
+        if not args.dry_run:
+            require_root()
         _run_set(args)
         return
 

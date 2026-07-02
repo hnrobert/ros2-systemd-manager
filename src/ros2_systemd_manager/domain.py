@@ -157,6 +157,65 @@ def _owner_of(path: Path) -> tuple:
         return -1, -1
 
 
+def _build_assignments(
+    *,
+    domain_id: Optional[int] = None,
+    rmw: Optional[str] = None,
+    localhost_only: Optional[int] = None,
+) -> Dict[str, str]:
+    """Build the {env_var: value} map for the requested DDS settings (None = skip)."""
+    assignments: Dict[str, str] = {}
+    if domain_id is not None:
+        assignments["ROS_DOMAIN_ID"] = str(domain_id)
+    if rmw is not None:
+        assignments["RMW_IMPLEMENTATION"] = resolve_rmw(rmw)
+    if localhost_only is not None:
+        assignments["ROS_LOCALHOST_ONLY"] = str(localhost_only)
+    return assignments
+
+
+def _compute_changes(
+    text: str,
+    assignments: Dict[str, str],
+    annotation: str,
+) -> tuple:
+    """Compute the result of applying `assignments` to `text`.
+
+    Returns (new_text, changes) where `changes` is a list of (kind, line) with
+    kind in {"update", "append"} for each key that would actually change. Keys
+    already at the requested value produce no entry (no needless churn).
+    """
+    new_text = text
+    to_append: List[str] = []
+    changes: List[tuple] = []
+    for key, value in assignments.items():
+        desired_value = str(value)
+        desired_line = f"export {key}={desired_value}  {annotation}"
+        pattern = _var_line_pattern(key)
+        matches = list(pattern.finditer(new_text))
+        if matches:
+            if all(
+                _extract_assignment_value(m.group(0), key) == desired_value
+                for m in matches
+            ):
+                continue
+            new_text = pattern.sub(lambda _m: desired_line, new_text)
+            changes.append(("update", desired_line))
+        else:
+            to_append.append(desired_line)
+            changes.append(("append", desired_line))
+
+    if to_append:
+        block = (
+            "\n\n# ROS DDS environment (managed by ros2-systemd-manager)\n"
+            + "\n".join(to_append)
+            + "\n"
+        )
+        new_text = (new_text.rstrip() + block) if new_text.strip() else block.lstrip()
+
+    return new_text, changes
+
+
 def _update_rc_file(
     rc_file: Path,
     assignments: Dict[str, str],
@@ -188,32 +247,7 @@ def _update_rc_file(
         err(f"Permission denied: {rc_file} (try with sudo)")
         return "skipped"
 
-    new_text = text
-    to_append: List[str] = []
-    for key, value in assignments.items():
-        desired_value = str(value)
-        desired_line = f"export {key}={desired_value}  {annotation}"
-        pattern = _var_line_pattern(key)
-        matches = list(pattern.finditer(new_text))
-        if matches:
-            # Value already correct everywhere -> leave the line (and any existing
-            # annotation) untouched to avoid needless churn.
-            if all(
-                _extract_assignment_value(m.group(0), key) == desired_value
-                for m in matches
-            ):
-                continue
-            new_text = pattern.sub(lambda _m: desired_line, new_text)
-        else:
-            to_append.append(desired_line)
-
-    if to_append:
-        block = (
-            "\n\n# ROS DDS environment (managed by ros2-systemd-manager)\n"
-            + "\n".join(to_append)
-            + "\n"
-        )
-        new_text = (new_text.rstrip() + block) if new_text.strip() else block.lstrip()
+    new_text, _changes = _compute_changes(text, assignments, annotation)
 
     if new_text == text:
         return "unchanged"
@@ -249,13 +283,9 @@ def set_ros_env(
     """
     from .runtime import err, log
 
-    assignments: Dict[str, str] = {}
-    if domain_id is not None:
-        assignments["ROS_DOMAIN_ID"] = str(domain_id)
-    if rmw is not None:
-        assignments["RMW_IMPLEMENTATION"] = resolve_rmw(rmw)
-    if localhost_only is not None:
-        assignments["ROS_LOCALHOST_ONLY"] = str(localhost_only)
+    assignments = _build_assignments(
+        domain_id=domain_id, rmw=rmw, localhost_only=localhost_only
+    )
 
     if not assignments:
         err("No ROS DDS variables selected to write; nothing to do.")
@@ -290,3 +320,55 @@ def set_ros_env(
         err("No profile/rc files found to write into.")
 
     return modified
+
+
+def preview_ros_env(
+    *,
+    domain_id: Optional[int] = None,
+    rmw: Optional[str] = None,
+    localhost_only: Optional[int] = None,
+) -> None:
+    """Dry-run: print which rc/profile files `set` would change, without writing.
+
+    For each file that would change, shows whether it would be created or updated
+    and the exact effective lines (with their annotation) that would be written.
+    Files already at the requested values are omitted; unreadable files are
+    reported as denied.
+    """
+    from .runtime import err, log
+
+    assignments = _build_assignments(
+        domain_id=domain_id, rmw=rmw, localhost_only=localhost_only
+    )
+    if not assignments:
+        err("No ROS DDS variables selected; nothing to preview.")
+        return
+
+    annotation = _build_annotation()
+    log("Dry run — no files will be changed.")
+    log("Requested values:")
+    for key, value in assignments.items():
+        log(f"  {key}={value}")
+    log("Files `set` would update:")
+
+    any_change = False
+    for rc_file in _rc_files():
+        if not rc_file.parent.is_dir():
+            continue
+        existed = rc_file.is_file()
+        try:
+            text = rc_file.read_text(encoding="utf-8", errors="ignore") if existed else ""
+        except PermissionError:
+            print(f"  [denied ] {rc_file}")
+            continue
+        _new_text, changes = _compute_changes(text, assignments, annotation)
+        if not changes:
+            continue
+        any_change = True
+        verb = "create " if not existed else "update "
+        print(f"  [{verb}] {rc_file}")
+        for kind, line in changes:
+            print(f"           {kind:>6}: {line}")
+
+    if not any_change:
+        log("Nothing to do — all relevant rc/profile files already have the requested values.")

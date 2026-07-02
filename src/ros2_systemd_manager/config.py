@@ -25,7 +25,8 @@ def get_help_text() -> str:
         "                        -r/--rmw [cyclonedds|fastrtps] (default cyclonedds)\n"
         "                        -l/--localhost-only [0|1]      (default 1)\n"
         "                      No options, or a bare flag (-d/-r/-l without a value), prompts for\n"
-        "                      confirmation before applying the default value(s).\n\n"
+        "                      confirmation before applying the default value(s).\n"
+        "                      Add -n/--dry-run to preview which files would change (no write).\n\n"
         "SCOPING:\n"
         "  By default install/apply/update/uninstall/list act on the CURRENT directory's\n"
         "  ros2_services.yaml only. Pass -a/--all to operate across every tracked config\n"
@@ -40,6 +41,7 @@ def get_help_text() -> str:
         "  sudo ros2-systemd-manager set -d 42                 # write only ROS_DOMAIN_ID=42\n"
         "  sudo ros2-systemd-manager set -d 42 -r fastrtps     # write domain 42 + Fast DDS only\n"
         "  sudo ros2-systemd-manager set                       # confirm, then write all defaults\n"
+        "  ros2-systemd-manager set -d 42 --dry-run            # preview files/lines, change nothing\n"
         "  ros2-systemd-manager list --all                     # print every tracked unit"
     )
 
