@@ -35,7 +35,7 @@ If you've ever lost a robot stack to a reboot, juggled a dozen terminal tabs, or
   - [Installation](#installation)
   - [CLI](#cli)
     - [Action reference](#action-reference)
-    - [Scoping: current directory vs. `--all`](#scoping-current-directory-vs---all)
+    - [Scoping: current directory vs. `--global`](#scoping-current-directory-vs---global)
   - [ROS DDS Environment (`set`)](#ros-dds-environment-set)
     - [When to use it](#when-to-use-it)
     - [What gets written](#what-gets-written)
@@ -92,7 +92,7 @@ ros2-systemd-manager -v          # sanity check
 ## CLI
 
 ```bash
-ros2-systemd-manager [-v] [-c CONFIG] [-w WORKSPACE_KEY] [-f] [-a] [-d [N]] [-r [NAME]] [-l [0|1]] [action]
+ros2-systemd-manager [-v] [-c CONFIG] [-w WORKSPACE_KEY] [-f] [-a] [-g] [-n] [-d [N]] [-r [NAME]] [-l [0|1]] [action]
 ```
 
 | Option | Description |
@@ -100,42 +100,45 @@ ros2-systemd-manager [-v] [-c CONFIG] [-w WORKSPACE_KEY] [-f] [-a] [-d [N]] [-r 
 | `-v`, `--version` | Show the program's version number and exit. |
 | `-c`, `--config PATH` | Path to the YAML config (default: `./ros2_services.yaml`, then the packaged default). |
 | `-w`, `--workspace-key KEY` | Operate on a single workspace key (default: all workspaces in the config). |
-| `-f`, `--force` | Force overwrite when running `init`. |
-| `-a`, `--all` | Operate across **all** tracked configs/units (every directory ever installed), not just the current one. Applies to `install` / `apply` / `update` / `uninstall` / `list`. |
+| `-f`, `--force` | **Skip all confirmation prompts** (assume yes): the manual-modification archive prompt, the `set` defaults-confirmation, and `init` overwrite. |
+| `-a`, `--all` | Include services marked `explicit_start`/`explicit_stop` in the operation (override the per-service guards). Applies to `install`/`apply`/`update`/`uninstall`. |
+| `-g`, `--global` | Operate across **all** tracked configs (every directory ever installed), not just the current one. Applies to `install`/`apply`/`update`/`uninstall`/`list`. |
 | `-n`, `--dry-run` | With `set`: list the rc/profile files that would change (and the exact lines that would be written) **without modifying anything**. Does not require root. |
 | `-d`, `--domain-id [N]` | `ROS_DOMAIN_ID` for `set` (default `0`). Bare `-d` applies the default after confirmation. |
 | `-r`, `--rmw [NAME]` | RMW for `set`: `cyclonedds` \| `fastrtps` (default `cyclonedds`). Bare `-r` applies the default after confirmation. |
 | `-l`, `--localhost-only [0\|1]` | `ROS_LOCALHOST_ONLY` for `set` (default `1`). Bare `-l` applies the default after confirmation. |
+
+These three flags are **orthogonal and compose freely**, e.g. `apply -g -a -f` = every config, every service (including explicit ones), no prompts.
 
 **Actions:** `init` · `install` · `apply` · `uninstall` · `update` · `makefile` · `list` · `set` · `upgrade`
 
 ### Action reference
 
 - **`init`** — Scaffold a default `ros2_services.yaml` and Makefile in the current directory. Auto-fills `user`/`group`/`home`, sets the workspace key/path to the current directory, and even auto-detects an existing `ROS_DOMAIN_ID` from your shell profiles. Use `--force` to overwrite, or `--config PATH` to write elsewhere.
-- **`install`** — Write unit files + `daemon-reload`, **without** starting or enabling. **Requires root.** Current config only (`-a` = every tracked config).
-- **`apply`** — Install, then start and enable on boot (`enable: false` services start but won't auto-start). **Requires root.** Current config only (`-a` = every tracked config).
-- **`update`** — Reconcile systemd with your YAML: stop this config's previously tracked units, remove stale ones (tracked for **this** config but no longer defined in it), then bring the current set online and refresh the Makefile. Stale cleanup is **scoped per directory** — updating one project never touches another's units. **Requires root.** `-a` updates every tracked config.
-- **`uninstall`** — Stop, disable, remove unit files, `daemon-reload`, `reset-failed`. **Requires root.** Current config only; `uninstall -a` removes every tracked unit everywhere.
+- **`install`** — Write unit files + `daemon-reload`, **without** starting or enabling. **Requires root.** Current config only (`-g` = every tracked config).
+- **`apply`** — Install, then start and enable on boot (`enable: false` services start but won't auto-start; `explicit_start` services aren't started unless `-a`). **Requires root.** Current config only (`-g` = every tracked config).
+- **`update`** — Reconcile systemd with your YAML: stop this config's previously tracked units (skipping `explicit_stop` ones unless `-a`), remove stale ones (tracked for **this** config but no longer defined in it), then bring the current set online and refresh the Makefile. Stale cleanup is **scoped per directory** — updating one project never touches another's units. **Requires root.** `-g` updates every tracked config.
+- **`uninstall`** — Stop, disable, remove unit files, `daemon-reload`, `reset-failed`. `explicit_stop` services are left running unless `-a`. **Requires root.** Current config only; `-g` repeats across every tracked config.
 - **`makefile`** — Regenerate the Makefile helper only; no systemd changes.
-- **`list`** — Print this config's unit names (one per line). `list --all` prints every tracked unit across all configs. Handy on its own and used by the Makefile `-all` targets.
+- **`list`** — Print this config's unit names (one per line). `list --global` prints every tracked unit across all configs. Handy on its own and used by the Makefile `-global` targets.
 - **`set`** — Write selected ROS DDS env vars into shell rc/profile files (only the keys you pass). See [ROS DDS Environment](#ros-dds-environment-set). **Requires root.**
 - **`upgrade`** — Self-upgrade via `pip install --upgrade` (adds `--user` automatically when not in a venv and not root).
 
-### Scoping: current directory vs. `--all`
+### Scoping: current directory vs. `--global`
 
 Keep a **separate `ros2_services.yaml` in each project directory**, and every action defaults to the **current directory only**. The tool remembers which config installed each unit (an `.origin` sidecar in its tracking store), so:
 
 - no flag → only the current directory's config.
-- **`-a` / `--all`** → every config the tool has ever installed (every directory you've `apply`-ed from).
+- **`-g` / `--global`** → every config the tool has ever installed (every directory you've `apply`-ed from).
 
 ```bash
 sudo ros2-systemd-manager update           # only this project
-sudo ros2-systemd-manager update -a        # every tracked project
-sudo ros2-systemd-manager uninstall -a     # nuke every tracked unit everywhere
-ros2-systemd-manager list --all            # see everything the tool manages
+sudo ros2-systemd-manager update -g        # every tracked project
+sudo ros2-systemd-manager uninstall -g     # every tracked project
+ros2-systemd-manager list --global         # see everything the tool manages
 ```
 
-> **Migration:** units tracked before this feature have no recorded origin. They're left untouched by default `update`/`uninstall` (safe) and still swept by `--all`. Origins attach the next time you `apply`/`update` each config.
+> **Migration:** units tracked before this feature have no recorded origin. They're left untouched by default `update`/`uninstall` (safe) and still swept by `--global`. Origins attach the next time you `apply`/`update` each config.
 
 ## ROS DDS Environment (`set`)
 
@@ -255,6 +258,17 @@ Generates:
 | `service_options` | no | `[]` | Raw `[Service]` lines (e.g. `CapabilityBoundingSet=`, `CPUAffinity=`). |
 | `use_root` | no | `false` | When `true`, force this service to run as `root` with `HOME=/root`. |
 | `enable` | no | `true` | When `false`, the service starts but isn't enabled on boot. |
+| `explicit_start` | no | `false` | When `true`, the service is **installed** but **not** auto-started/enabled by `apply`, `make start`/`enable`/`restart`. Start it on demand (`make start-<svc>`) or include it with `-a`/`--all`. |
+| `explicit_stop` | no | `false` | When `true`, the service is **not** auto-stopped/disabled/removed by `make stop`/`disable`, `uninstall`, or `update`'s stop-previous. Keeps critical services running. Override with `-a`/`--all`. |
+
+#### On-demand & keep-running services
+
+Two independent guards let a service opt out of the default group lifecycle:
+
+- **`explicit_start: true`** — "start this on demand." The unit is still installed (so `make start-<svc>` / `systemctl start` work), but `apply` and `make start`/`enable`/`restart` skip it. Bring it up with `make start-ros2-foxglove-bridge`, or include it via `-a`/`--all`.
+- **`explicit_stop: true`** — "keep this running." `make stop`/`disable`, `uninstall`, and `update`'s stop-previous skip it, so a critical service survives stopping/restarting the rest of the stack.
+
+Both are overridden by `-a`/`--all`, and they compose with `enable` and `-g`/`--global` (e.g. `apply -g -a` starts on-demand services across every project).
 
 ### `makefile`
 
@@ -361,29 +375,36 @@ Every project gets an intuitive Makefile of `systemctl` shortcuts, derived from 
 # This project only:
 make apply                    # install + start + enable
 make install                  # install unit files only
-make start / stop / restart   # control all configured units
+make start / stop / restart   # control configured units (respects explicit_start/explicit_stop)
 make status                   # systemctl status all configured units
 make status-long              # status with 100 log lines
 make enable / disable
 make logs                     # follow logs for all configured units
 make logs-recent              # last 200 log lines
-make <op>-<service>           # op in start/stop/restart/status/enable/disable/logs
+make <op>-<service>           # op in start/stop/restart/status/enable/disable/logs (always works, even for explicit services)
 make <op>-<service>-<sfx>     # e.g. logs-<svc>-recent, status-<svc>-long
 make update                   # reconcile + refresh generated mk
-make uninstall                # remove all configured units
+make uninstall                # remove configured units (skips explicit_stop)
 make upgrade                  # self-upgrade via pip
 make makefile                 # refresh generated mk only
 make list                     # print this config's unit names
 ```
 
-`-all` targets reach across **every tracked config** (every directory you've `apply`-ed from), via `list --all`:
+Per-target flags (set on the command line):
 
 ```bash
-make start-all / stop-all / restart-all / status-all / status-all-long
-make enable-all / disable-all
-make logs-all / logs-recent-all
-make install-all / apply-all / update-all / uninstall-all
-make list --all               # print every tracked unit
+make start ALL=1              # also start explicit_start services
+make apply ALL=1 FORCE=1      # include explicit services + skip prompts
+```
+
+`-global` targets reach across **every tracked config** (every directory you've `apply`-ed from), via `list --global`:
+
+```bash
+make start-global / stop-global / restart-global / status-global / status-global-long
+make enable-global / disable-global
+make logs-global / logs-recent-global
+make install-global / apply-global / update-global / uninstall-global
+make list-global              # print every tracked unit
 ```
 
 **Config discovery:** no hardcoded path — it looks for `./ros2_services.yaml` in the current directory. Override with `CONFIG=` or `--config`:
@@ -431,20 +452,24 @@ Use the same `ROS_DOMAIN_ID` as your workspace's `ros_domain_id`, the RMW your s
 
 ### Does `update` or `uninstall` touch my *other* projects?
 
-No — by default every action is scoped to the **current directory's** `ros2_services.yaml`. The tool records which config installed each unit (an `.origin` sidecar), so `update` only removes stale units that *this* config owned. Other directories' units are never touched unless you explicitly pass `-a`/`--all`.
+No — by default every action is scoped to the **current directory's** `ros2_services.yaml`. The tool records which config installed each unit (an `.origin` sidecar), so `update` only removes stale units that *this* config owned. Other directories' units are never touched unless you explicitly pass `-g`/`--global`.
 
 ### How do I run an action across every project at once?
 
-Add `-a`/`--all` — it operates on every config the tool has ever installed:
+Add `-g`/`--global` — it operates on every config the tool has ever installed:
 
 ```bash
-sudo ros2-systemd-manager apply -a       # apply every tracked project
-sudo ros2-systemd-manager update -a      # reconcile every tracked project
-sudo ros2-systemd-manager uninstall -a   # remove every tracked unit everywhere
-ros2-systemd-manager list --all          # see everything the tool manages
+sudo ros2-systemd-manager apply -g       # apply every tracked project
+sudo ros2-systemd-manager update -g      # reconcile every tracked project
+sudo ros2-systemd-manager uninstall -g   # uninstall every tracked project
+ros2-systemd-manager list --global       # see everything the tool manages
 ```
 
-The generated Makefile offers the same as `make apply-all`, `make update-all`, `make uninstall-all`, etc.
+The generated Makefile offers the same as `make apply-global`, `make update-global`, `make uninstall-global`, etc. Add `-a` to also include `explicit_start`/`explicit_stop` services, and `-f` to skip prompts.
+
+### How do I keep a service running when I stop the rest?
+
+Set `explicit_stop: true` on it. Then `make stop`/`disable`, `uninstall`, and `update`'s stop-previous all skip it, so it survives stopping or restarting the rest of the stack. To stop it anyway, target it directly (`make stop-<svc>`) or pass `-a`/`--all`. (The mirror option `explicit_start: true` does the same for starting — useful for on-demand services like Foxglove.)
 
 ### Where does the tool store its data?
 

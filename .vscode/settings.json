@@ -1,5 +1,6 @@
 {
     "cSpell.words": [
+        "addprefix",
         "anymore",
         "autoaim",
         "behavior",
@@ -14,6 +15,7 @@
         "keepends",
         "lastword",
         "ncipollo",
+        "originless",
         "pipefail",
         "pycache",
         "pypa",

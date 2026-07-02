@@ -17,7 +17,7 @@ def get_help_text() -> str:
         "  update              Sync systemd with YAML for THIS config (scoped per directory)\n"
         "  uninstall           Stop, disable, and securely remove unit files\n"
         "  makefile            Regenerate the local Makefile helper only\n"
-        "  list                Print this config's unit names (add --all for every tracked config)\n"
+        "  list                Print this config's unit names (add --global for every tracked config)\n"
         "  upgrade             Self-upgrade this CLI tool remotely via pip\n"
         "  set [options]       Write ROS DDS env into shell profile/rc files (only keys you pass):\n"
         "                      ROS_DOMAIN_ID / RMW_IMPLEMENTATION / ROS_LOCALHOST_ONLY\n"
@@ -27,22 +27,22 @@ def get_help_text() -> str:
         "                      No options, or a bare flag (-d/-r/-l without a value), prompts for\n"
         "                      confirmation before applying the default value(s).\n"
         "                      Add -n/--dry-run to preview which files would change (no write).\n\n"
-        "SCOPING:\n"
-        "  By default install/apply/update/uninstall/list act on the CURRENT directory's\n"
-        "  ros2_services.yaml only. Pass -a/--all to operate across every tracked config\n"
-        "  (every directory you have ever applied).\n\n"
+        "GLOBAL FLAGS (compose freely, e.g. `apply -g -a -f`):\n"
+        "  -g/--global   operate across EVERY tracked config (every dir you have applied)\n"
+        "  -a/--all      include explicit_start/explicit_stop services (override the guards)\n"
+        "  -f/--force    skip all confirmation prompts (assume yes)\n\n"
         "EXAMPLES:\n"
         "  ros2-systemd-manager init --force\n"
         "  sudo ros2-systemd-manager apply --config ./ros2_services.yaml\n"
         "  sudo ros2-systemd-manager update                    # current directory only\n"
-        "  sudo ros2-systemd-manager update -a                 # every tracked config\n"
-        "  sudo ros2-systemd-manager uninstall                 # current directory only\n"
-        "  sudo ros2-systemd-manager uninstall -a              # every tracked unit\n"
+        "  sudo ros2-systemd-manager update -g                 # every tracked config\n"
+        "  sudo ros2-systemd-manager apply -a                  # also start explicit_start services\n"
+        "  sudo ros2-systemd-manager uninstall -g -a -f        # everywhere, everything, no prompts\n"
         "  sudo ros2-systemd-manager set -d 42                 # write only ROS_DOMAIN_ID=42\n"
         "  sudo ros2-systemd-manager set -d 42 -r fastrtps     # write domain 42 + Fast DDS only\n"
         "  sudo ros2-systemd-manager set                       # confirm, then write all defaults\n"
         "  ros2-systemd-manager set -d 42 --dry-run            # preview files/lines, change nothing\n"
-        "  ros2-systemd-manager list --all                     # print every tracked unit"
+        "  ros2-systemd-manager list --global                  # print every tracked unit"
     )
 
 
@@ -133,6 +133,12 @@ def validate_config(config: Dict[str, Any]) -> None:
                 unit_name = svc.get("unit_name", "<unknown>")
                 err(f"Service {unit_name} has invalid enable: expected true/false.")
                 sys.exit(1)
+
+            for flag in ("explicit_start", "explicit_stop"):
+                if flag in svc and not isinstance(svc[flag], bool):
+                    unit_name = svc.get("unit_name", "<unknown>")
+                    err(f"Service {unit_name} has invalid {flag}: expected true/false.")
+                    sys.exit(1)
 
             service_options = svc.get("service_options")
             if service_options is not None:

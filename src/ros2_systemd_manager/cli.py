@@ -13,8 +13,7 @@ from .makefile_gen import write_makefile
 from .runtime import err, log, require_root
 from .scaffold import init_defaults
 from .systemd_ops import (get_workspace_unit_names, install_only,
-                          install_start_enable, sync_update, uninstall,
-                          uninstall_all)
+                          install_start_enable, sync_update, uninstall)
 from .version_control import all_config_paths, all_tracked_units
 
 
@@ -65,7 +64,7 @@ def get_help_text() -> str:
         "  update              Sync systemd with YAML for THIS config (scoped per directory)\n"
         "  uninstall           Stop, disable, and securely remove unit files\n"
         "  makefile            Regenerate the local Makefile helper only\n"
-        "  list                Print this config's unit names (add --all for every tracked config)\n"
+        "  list                Print this config's unit names (add --global for every tracked config)\n"
         "  upgrade             Self-upgrade this CLI tool remotely via pip\n"
         "  set [options]       Write ROS DDS env into shell profile/rc files (only keys you pass):\n"
         "                      ROS_DOMAIN_ID / RMW_IMPLEMENTATION / ROS_LOCALHOST_ONLY\n"
@@ -75,22 +74,22 @@ def get_help_text() -> str:
         "                      No options, or a bare flag (-d/-r/-l without a value), prompts for\n"
         "                      confirmation before applying the default value(s).\n"
         "                      Add -n/--dry-run to preview which files would change (no write).\n\n"
-        "SCOPING:\n"
-        "  By default install/apply/update/uninstall/list act on the CURRENT directory's\n"
-        "  ros2_services.yaml only. Pass -a/--all to operate across every tracked config\n"
-        "  (every directory you have ever applied).\n\n"
+        "GLOBAL FLAGS (compose freely, e.g. `apply -g -a -f`):\n"
+        "  -g/--global   operate across EVERY tracked config (every dir you have applied)\n"
+        "  -a/--all      include explicit_start/explicit_stop services (override the guards)\n"
+        "  -f/--force    skip all confirmation prompts (assume yes)\n\n"
         "EXAMPLES:\n"
         "  ros2-systemd-manager init --force\n"
         "  sudo ros2-systemd-manager apply --config ./ros2_services.yaml\n"
         "  sudo ros2-systemd-manager update                    # current directory only\n"
-        "  sudo ros2-systemd-manager update -a                 # every tracked config\n"
-        "  sudo ros2-systemd-manager uninstall                 # current directory only\n"
-        "  sudo ros2-systemd-manager uninstall -a              # every tracked unit\n"
+        "  sudo ros2-systemd-manager update -g                 # every tracked config\n"
+        "  sudo ros2-systemd-manager apply -a                  # also start explicit_start services\n"
+        "  sudo ros2-systemd-manager uninstall -g -a -f        # everywhere, everything, no prompts\n"
         "  sudo ros2-systemd-manager set -d 42                 # write only ROS_DOMAIN_ID=42\n"
         "  sudo ros2-systemd-manager set -d 42 -r fastrtps     # write domain 42 + Fast DDS only\n"
         "  sudo ros2-systemd-manager set                       # confirm, then write all defaults\n"
         "  ros2-systemd-manager set -d 42 --dry-run            # preview files/lines, change nothing\n"
-        "  ros2-systemd-manager list --all                     # print every tracked unit"
+        "  ros2-systemd-manager list --global                  # print every tracked unit"
     )
 
 
@@ -151,13 +150,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "-f", "--force",
         action="store_true",
-        help="Force overwrite when executing the 'init' action",
+        help="Skip all confirmation prompts (assume yes): the manual-modification archive "
+             "prompt, the 'set' defaults-confirmation, and 'init' overwrite.",
     )
     parser.add_argument(
         "-a", "--all",
         action="store_true",
-        help="Operate across ALL tracked configs/units (every directory ever installed), "
-             "not just the current one. Applies to install/apply/update/uninstall/list.",
+        help="Include services marked explicit_start/explicit_stop in the operation "
+             "(override the per-service guards). Applies to install/apply/update/uninstall.",
+    )
+    parser.add_argument(
+        "-g", "--global",
+        action="store_true", dest="global_",
+        help="Operate across ALL tracked configs (every directory ever installed), not just "
+             "the current one. Applies to install/apply/update/uninstall/list.",
     )
     parser.add_argument(
         "-n", "--dry-run",
@@ -252,7 +258,9 @@ def _run_set(args: argparse.Namespace) -> None:
         print(header)
         for var, value in confirm_items:
             print(f"  {var}={value}")
-        if not _confirm("Proceed?"):
+        if args.force:
+            log("--force: applying without prompting.")
+        elif not _confirm("Proceed?"):
             log("Aborted: nothing was changed.")
             return
 
@@ -264,8 +272,8 @@ def _run_set(args: argparse.Namespace) -> None:
 
 
 def _run_list(args: argparse.Namespace) -> None:
-    """Print tracked unit names, one per line. --all spans every tracked config."""
-    if args.all:
+    """Print unit names, one per line. --global spans every tracked config."""
+    if args.global_:
         units = all_tracked_units()
     else:
         config_path = Path(args.config) if args.config else Path(
@@ -278,19 +286,16 @@ def _run_list(args: argparse.Namespace) -> None:
         print(unit)
 
 
-def _run_all(action: str) -> None:
-    """Run install/apply/update/uninstall across every tracked config (--all)."""
+def _run_global(args: argparse.Namespace) -> None:
+    """Run install/apply/update/uninstall across every tracked config (--global)."""
+    action = args.action
     config_paths = all_config_paths()
     if not config_paths:
         log("No tracked configs found. Run `apply` in each project directory first.")
         return
 
-    log(f"--all: {action} across {len(config_paths)} tracked config(s).")
-
-    if action == "uninstall":
-        # Operates on the full tracked unit set; no config content required.
-        uninstall_all(Path("/etc/systemd/system"))
-        return
+    log(f"--global: {action} across {len(config_paths)} tracked config(s) "
+        f"(include_explicit={args.all}, force={args.force}).")
 
     for cp in config_paths:
         log(f"== {action}: {cp} ==")
@@ -302,11 +307,13 @@ def _run_all(action: str) -> None:
             continue
         workspace_keys = list(cfg.get("workspaces", {}).keys())
         if action == "install":
-            install_only(cfg, workspace_keys, cp)
+            install_only(cfg, workspace_keys, cp, include_explicit=args.all, force=args.force)
         elif action == "apply":
-            install_start_enable(cfg, workspace_keys, cp)
+            install_start_enable(cfg, workspace_keys, cp, include_explicit=args.all, force=args.force)
         elif action == "update":
-            sync_update(cfg, workspace_keys, cp)
+            sync_update(cfg, workspace_keys, cp, include_explicit=args.all, force=args.force)
+        elif action == "uninstall":
+            uninstall(cfg, workspace_keys, include_explicit=args.all, force=args.force)
         write_makefile(cfg, Path(cp))
 
 
@@ -343,12 +350,12 @@ def run() -> None:
         _run_list(args)
         return
 
-    # install / apply / update / uninstall / makefile require a config (unless --all)
+    # install / apply / update / uninstall / makefile require a config (unless --global)
     if action_arg in {"install", "apply", "update", "uninstall"}:
         require_root()
 
-    if args.all and action_arg in {"install", "apply", "update", "uninstall"}:
-        _run_all(action_arg)
+    if args.global_ and action_arg in {"install", "apply", "update", "uninstall"}:
+        _run_global(args)
         return
 
     config_path = Path(args.config) if args.config else Path(
@@ -362,16 +369,20 @@ def run() -> None:
 
     log(f"Config file: {config_path}")
     log(f"Workspace keys: {workspace_keys}")
-    log(f"Action: {action}")
+    log(f"Action: {action} (include_explicit={args.all}, force={args.force})")
 
     if action == "install":
-        install_only(config, workspace_keys, config_id)
+        install_only(config, workspace_keys, config_id,
+                     include_explicit=args.all, force=args.force)
     elif action == "apply":
-        install_start_enable(config, workspace_keys, config_id)
+        install_start_enable(config, workspace_keys, config_id,
+                             include_explicit=args.all, force=args.force)
     elif action == "uninstall":
-        uninstall(config, workspace_keys)
+        uninstall(config, workspace_keys,
+                  include_explicit=args.all, force=args.force)
     elif action == "update":
-        sync_update(config, workspace_keys, config_id)
+        sync_update(config, workspace_keys, config_id,
+                    include_explicit=args.all, force=args.force)
     elif action == "makefile":
         log("Skipping systemd operations; refreshing Makefile only.")
     else:

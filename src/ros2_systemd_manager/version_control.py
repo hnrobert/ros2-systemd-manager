@@ -18,10 +18,23 @@ def md5_string(content: str) -> str:
     return hashlib.md5(content.encode("utf-8")).hexdigest()
 
 
-def check_and_prompt_for_modifications(systemd_unit_path: Path, unit_name: str) -> bool:
+def _archive_modified_unit(systemd_unit_path: Path, unit_name: str) -> None:
+    """Archive a manually-modified unit file before it is overwritten/removed."""
+    ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    archive_path = ARCHIVE_DIR / f"{unit_name}_{timestamp}.archive"
+    try:
+        shutil.copy2(systemd_unit_path, archive_path)
+        log(f"Archived to {archive_path}")
+    except OSError as e:
+        err(f"Failed to archive: {e}")
+
+
+def check_and_prompt_for_modifications(systemd_unit_path: Path, unit_name: str, force: bool = False) -> bool:
     """
     Checks if the systemd file differs from our tracked version.
-    Prompts the user if it differs.
+    Prompts the user if it differs, unless force=True (then it auto-archives the
+    manual change and proceeds without prompting).
     Returns True to proceed, False to cancel.
     """
     tracked_file = PREVIOUS_UPDATE_DIR / unit_name
@@ -42,6 +55,11 @@ def check_and_prompt_for_modifications(systemd_unit_path: Path, unit_name: str) 
     systemd_lines = systemd_unit_path.read_text(
         encoding="utf-8").splitlines(keepends=True)
 
+    if force:
+        # --force: skip the prompt and take the safe default (archive, then proceed).
+        _archive_modified_unit(systemd_unit_path, unit_name)
+        return True
+
     print(f"\n[Warning] Manual modifications detected for {unit_name}:")
     diff = difflib.unified_diff(
         tracked_lines, systemd_lines,
@@ -59,14 +77,7 @@ def check_and_prompt_for_modifications(systemd_unit_path: Path, unit_name: str) 
         choice = input(
             f"Choose an action for {unit_name} [Y/u/c]: ").strip().lower()
         if choice in ('', 'y'):
-            ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            archive_path = ARCHIVE_DIR / f"{unit_name}_{timestamp}.archive"
-            try:
-                shutil.copy2(systemd_unit_path, archive_path)
-                log(f"Archived to {archive_path}")
-            except OSError as e:
-                err(f"Failed to archive: {e}")
+            _archive_modified_unit(systemd_unit_path, unit_name)
             return True
         elif choice == 'u':
             return True

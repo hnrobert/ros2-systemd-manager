@@ -1,7 +1,7 @@
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .config import resolve_makefile_path
 from .runtime import err, log
@@ -90,9 +90,20 @@ def build_makefile_content(
     *,
     script_default: str,
     unit_names: List[str],
+    start_units: Optional[List[str]] = None,
+    stop_units: Optional[List[str]] = None,
+    restart_units: Optional[List[str]] = None,
 ) -> str:
     """Build Makefile content for service lifecycle operations."""
+    # Default the guard-aware sets to "all units" so callers/tests that only pass
+    # unit_names get the legacy behavior (every unit in every set).
+    start_units = list(start_units) if start_units is not None else list(unit_names)
+    stop_units = list(stop_units) if stop_units is not None else list(unit_names)
+    restart_units = list(restart_units) if restart_units is not None else list(unit_names)
     quoted_units = " ".join(unit_names)
+    quoted_start = " ".join(start_units)
+    quoted_stop = " ".join(stop_units)
+    quoted_restart = " ".join(restart_units)
 
     service_entries: List[Tuple[str, str]] = []
     seen_service_keys = set()
@@ -173,19 +184,20 @@ logs-{service_key}-recent:
             "update",
             "makefile",
             "list",
-            "start-all",
-            "stop-all",
-            "restart-all",
-            "status-all",
-            "status-all-long",
-            "enable-all",
-            "disable-all",
-            "logs-all",
-            "logs-recent-all",
-            "install-all",
-            "apply-all",
-            "uninstall-all",
-            "update-all",
+            "start-global",
+            "stop-global",
+            "restart-global",
+            "status-global",
+            "status-global-long",
+            "enable-global",
+            "disable-global",
+            "logs-global",
+            "logs-recent-global",
+            "install-global",
+            "apply-global",
+            "uninstall-global",
+            "update-global",
+            "list-global",
             *per_service_targets,
         ]
     )
@@ -200,14 +212,19 @@ SCRIPT ?= {script_default}
 CONFIG ?=
 WORKSPACE_KEY ?=
 UNITS := {quoted_units}
+# Guard-aware subsets (explicit_start / explicit_stop excluded unless ALL=1).
+START_UNITS := {quoted_start}
+STOP_UNITS := {quoted_stop}
+RESTART_UNITS := {quoted_restart}
 GENERATED_MK := $(lastword $(MAKEFILE_LIST))
 
 EFFECTIVE_SCRIPT := $(if $(strip $(SCRIPT)),$(SCRIPT),{script_default})
 EFFECTIVE_CONFIG := $(if $(strip $(CONFIG)),$(CONFIG),$(firstword $(wildcard ./ros2_services.yaml ./*.yaml)))
 
 # Every unit ever installed across all configs. Lazily expanded (the shell call
-# runs only when an *-all target references it). Used by the -all targets below.
-ALL_UNITS = $(shell $(EFFECTIVE_SCRIPT) list --all)
+# runs only when a *-global target references it). ALL=1, GLOBAL=1, FORCE=1 are
+# set on the command line, e.g. `make start ALL=1` or `make apply-global FORCE=1`.
+GLOBAL_UNITS = $(shell $(EFFECTIVE_SCRIPT) list --global)
 
 .PHONY: {phony_targets}
 
@@ -230,13 +247,18 @@ help:
 	@echo \"  make update                 # stop old + uninstall removed + install/start/enable + refresh generated mk\"
 	@echo \"  make makefile               # refresh generated mk only (no systemd changes)\"
 	@echo \"\"
+	@echo \"  Flags (set on the command line):\"
+	@echo \"    ALL=1      include explicit_start/explicit_stop services (per config)\"
+	@echo \"    GLOBAL=1   act across every tracked config (alias for the *-global targets)\"
+	@echo \"    FORCE=1    skip confirmation prompts (--force)\"
+	@echo \"\"
 	@echo \"  Across ALL tracked configs (every directory ever installed):\"
-	@echo \"  make list                   # print this config's units (list --all: every config)\"
-	@echo \"  make <op>-all               # op in start/stop/restart/status/enable/disable/logs\"
-	@echo \"  make install-all            # install every tracked config\"
-	@echo \"  make apply-all              # apply every tracked config\"
-	@echo \"  make update-all             # update every tracked config\"
-	@echo \"  make uninstall-all          # uninstall every tracked unit\"
+	@echo \"  make list                   # print this config's units (list-global: every config)\"
+	@echo \"  make <op>-global            # op in start/stop/restart/status/enable/disable/logs\"
+	@echo \"  make install-global         # install every tracked config\"
+	@echo \"  make apply-global           # apply every tracked config\"
+	@echo \"  make update-global          # update every tracked config\"
+	@echo \"  make uninstall-global       # uninstall every tracked unit\"
 	@echo \"  make <target> CONFIG=./file.yaml  # override auto-discovered yaml\"
 
 ensure-config:
@@ -249,22 +271,22 @@ upgrade:
 	$(EFFECTIVE_SCRIPT) upgrade
 
 install: ensure-config
-	$(SUDO) $(EFFECTIVE_SCRIPT) install --config \"$(EFFECTIVE_CONFIG)\"
+	$(SUDO) $(EFFECTIVE_SCRIPT) install $(if $(ALL),--all,) $(if $(FORCE),--force,) --config \"$(EFFECTIVE_CONFIG)\"
 
 apply: ensure-config
-	$(SUDO) $(EFFECTIVE_SCRIPT) apply --config \"$(EFFECTIVE_CONFIG)\"
+	$(SUDO) $(EFFECTIVE_SCRIPT) apply $(if $(ALL),--all,) $(if $(FORCE),--force,) --config \"$(EFFECTIVE_CONFIG)\"
 
 uninstall: ensure-config
-	$(SUDO) $(EFFECTIVE_SCRIPT) uninstall --config \"$(EFFECTIVE_CONFIG)\"
+	$(SUDO) $(EFFECTIVE_SCRIPT) uninstall $(if $(ALL),--all,) $(if $(FORCE),--force,) --config \"$(EFFECTIVE_CONFIG)\"
 
 start:
-\t$(SUDO) systemctl start $(UNITS)
+\t$(SUDO) systemctl start $(if $(ALL),$(UNITS),$(START_UNITS))
 
 stop:
-\t$(SUDO) systemctl stop $(UNITS)
+\t$(SUDO) systemctl stop $(if $(ALL),$(UNITS),$(STOP_UNITS))
 
 restart:
-\t$(SUDO) systemctl restart $(UNITS)
+\t$(SUDO) systemctl restart $(if $(ALL),$(UNITS),$(RESTART_UNITS))
 
 status:
 \t$(SUDO) systemctl status $(UNITS)
@@ -273,10 +295,10 @@ status-long:
 	$(SUDO) systemctl status $(UNITS) --no-pager -l -n 100
 
 enable:
-\t$(SUDO) systemctl enable $(UNITS)
+\t$(SUDO) systemctl enable $(if $(ALL),$(UNITS),$(START_UNITS))
 
 disable:
-\t$(SUDO) systemctl disable $(UNITS)
+\t$(SUDO) systemctl disable $(if $(ALL),$(UNITS),$(STOP_UNITS))
 
 logs:
 	$(SUDO) journalctl $(foreach u,$(UNITS),-u $(u)) -f
@@ -285,7 +307,7 @@ logs-recent:
 	$(SUDO) journalctl $(foreach u,$(UNITS),-u $(u)) -n 200 --no-pager
 
 update: ensure-config
-	$(SUDO) $(EFFECTIVE_SCRIPT) update --config \"$(EFFECTIVE_CONFIG)\"
+	$(SUDO) $(EFFECTIVE_SCRIPT) update $(if $(ALL),--all,) $(if $(FORCE),--force,) --config \"$(EFFECTIVE_CONFIG)\"
 
 makefile: ensure-config
 	$(EFFECTIVE_SCRIPT) makefile --config \"$(EFFECTIVE_CONFIG)\"
@@ -296,44 +318,47 @@ list: ensure-config
 # --- across ALL tracked configs (every directory ever installed) ---
 # These ignore CONFIG and act on every unit the tool has installed.
 
-start-all:
-	$(SUDO) systemctl start $(ALL_UNITS)
+start-global:
+	$(SUDO) systemctl start $(GLOBAL_UNITS)
 
-stop-all:
-	$(SUDO) systemctl stop $(ALL_UNITS)
+stop-global:
+	$(SUDO) systemctl stop $(GLOBAL_UNITS)
 
-restart-all:
-	$(SUDO) systemctl restart $(ALL_UNITS)
+restart-global:
+	$(SUDO) systemctl restart $(GLOBAL_UNITS)
 
-status-all:
-	$(SUDO) systemctl status $(ALL_UNITS)
+status-global:
+	$(SUDO) systemctl status $(GLOBAL_UNITS)
 
-status-all-long:
-	$(SUDO) systemctl status $(ALL_UNITS) --no-pager -l -n 100
+status-global-long:
+	$(SUDO) systemctl status $(GLOBAL_UNITS) --no-pager -l -n 100
 
-enable-all:
-	$(SUDO) systemctl enable $(ALL_UNITS)
+enable-global:
+	$(SUDO) systemctl enable $(GLOBAL_UNITS)
 
-disable-all:
-	$(SUDO) systemctl disable $(ALL_UNITS)
+disable-global:
+	$(SUDO) systemctl disable $(GLOBAL_UNITS)
 
-logs-all:
-	$(SUDO) journalctl $(addprefix -u ,$(ALL_UNITS)) -f
+logs-global:
+	$(SUDO) journalctl $(addprefix -u ,$(GLOBAL_UNITS)) -f
 
-logs-recent-all:
-	$(SUDO) journalctl $(addprefix -u ,$(ALL_UNITS)) -n 200 --no-pager
+logs-recent-global:
+	$(SUDO) journalctl $(addprefix -u ,$(GLOBAL_UNITS)) -n 200 --no-pager
 
-install-all:
-	$(SUDO) $(EFFECTIVE_SCRIPT) install --all
+install-global:
+	$(SUDO) $(EFFECTIVE_SCRIPT) install --global $(if $(ALL),--all,) $(if $(FORCE),--force,)
 
-apply-all:
-	$(SUDO) $(EFFECTIVE_SCRIPT) apply --all
+apply-global:
+	$(SUDO) $(EFFECTIVE_SCRIPT) apply --global $(if $(ALL),--all,) $(if $(FORCE),--force,)
 
-uninstall-all:
-	$(SUDO) $(EFFECTIVE_SCRIPT) uninstall --all
+uninstall-global:
+	$(SUDO) $(EFFECTIVE_SCRIPT) uninstall --global $(if $(ALL),--all,) $(if $(FORCE),--force,)
 
-update-all:
-	$(SUDO) $(EFFECTIVE_SCRIPT) update --all
+update-global:
+	$(SUDO) $(EFFECTIVE_SCRIPT) update --global $(if $(ALL),--all,) $(if $(FORCE),--force,)
+
+list-global:
+	$(EFFECTIVE_SCRIPT) list --global
 
 {per_service_blocks_text}
 """
@@ -342,11 +367,23 @@ update-all:
 def write_makefile(config: Dict[str, Any], config_path: Path) -> Path:
     """Generate (or overwrite) Makefile based on YAML workspace services."""
     workspaces = config.get("workspaces", {})
-    unit_names = []
+    unit_names: List[str] = []
+    start_units: List[str] = []
+    stop_units: List[str] = []
+    restart_units: List[str] = []
     for ws_cfg in workspaces.values():
         for svc in ws_cfg.get("services", []):
-            unit_names.append(svc["unit_name"])
-            
+            name = svc["unit_name"]
+            explicit_start = bool(svc.get("explicit_start", False))
+            explicit_stop = bool(svc.get("explicit_stop", False))
+            unit_names.append(name)
+            if not explicit_start:
+                start_units.append(name)
+            if not explicit_stop:
+                stop_units.append(name)
+            if not explicit_start and not explicit_stop:
+                restart_units.append(name)
+
     if not unit_names:
         err("No services found in any workspace; cannot build Makefile units.")
         sys.exit(1)
@@ -364,6 +401,9 @@ def write_makefile(config: Dict[str, Any], config_path: Path) -> Path:
     content = build_makefile_content(
         script_default=script_default,
         unit_names=unit_names,
+        start_units=start_units,
+        stop_units=stop_units,
+        restart_units=restart_units,
     )
 
     output_path.write_text(content, encoding="utf-8")

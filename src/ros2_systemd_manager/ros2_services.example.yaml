@@ -9,9 +9,14 @@
 # 5) services can optionally declare service_options (list of raw systemd [Service] lines)
 #    Example: CapabilityBoundingSet=... / AmbientCapabilities=...
 # 6) services can set enable: false to start without auto-start on boot (default: true)
-# 7) workspaces can set ros_domain_id to isolate DDS traffic per workspace
-# 8) workspaces can use setup_scripts (list) instead of setup_script for multi-source
-# 9) use 'sudo ros2-systemd-manager set [-d [N]] [-r [cyclonedds|fastrtps]] [-l [0|1]]' to write the
+# 7) services can set explicit_start: true to EXCLUDE them from default start/enable/restart
+#    (apply, make start/enable/restart). They are still installed (unit file written) but only
+#    started when explicitly targeted or via -a/--all. Useful for on-demand services (e.g. Foxglove).
+# 8) services can set explicit_stop: true to EXCLUDE them from default stop/disable/uninstall
+#    (and update's stop-previous). Useful for critical services that must keep running.
+# 9) workspaces can set ros_domain_id to isolate DDS traffic per workspace
+# 10) workspaces can use setup_scripts (list) instead of setup_script for multi-source
+# 11) use 'sudo ros2-systemd-manager set [-d [N]] [-r [cyclonedds|fastrtps]] [-l [0|1]]' to write the
 #    ROS DDS env (ROS_DOMAIN_ID / RMW_IMPLEMENTATION / ROS_LOCALHOST_ONLY) into all shell rc/profile
 #    files. Only the keys you pass are written; a bare flag (-d/-r/-l without a value) or no flags
 #    at all prompts for confirmation before applying the default value(s):
@@ -19,8 +24,10 @@
 #    Typical use: fix a DDS mismatch where Foxglove shows topics but `ros2 topic list` does not —
 #    set your shell's DDS env to match your services (e.g. `set -d 42`), then open a new terminal.
 #
-# Supported actions (each scoped to THIS directory's config by default; add -a/--all
-# to operate across every tracked config — every directory you have ever applied):
+# Supported actions (each scoped to THIS directory's config by default):
+#   -g/--global   operate across every tracked config (every directory you have ever applied)
+#   -a/--all      include explicit_start/explicit_stop services (override the guards)
+#   -f/--force    skip all confirmation prompts (assume yes)
 # - upgrade                Self-upgrade this tool via pip install --upgrade
 # - install                Install unit files only, do not start or enable
 # - apply                  Install + start + enable on boot
@@ -64,6 +71,9 @@ workspaces:
       - unit_name: ros2-foxglove-bridge.service
         description: ROS2 Foxglove Bridge
         use_root: false # Optional: default false. When true, force this service to run as root.
+        explicit_start: true # Optional: default false. When true, this service is NOT auto-started by
+                             # apply / make start / make enable / make restart — start it on demand via
+                             # `make start-ros2-foxglove-bridge`, or include it with `-a/--all`.
         enable: true # Optional: default true. Set false to start without auto-start on boot.
         launch_command: ros2 launch foxglove_bridge foxglove_bridge_launch.xml
 

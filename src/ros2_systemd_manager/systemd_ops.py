@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .runtime import err, log, run_cmd
-from .version_control import (all_tracked_units, check_and_prompt_for_modifications,
+from .version_control import (check_and_prompt_for_modifications,
                               record_uninstall, record_update,
                               tracked_units_for_config)
 
@@ -105,15 +105,20 @@ def validate_workspace_for_install(
             sys.exit(1)
 
 
-def install_only(config: Dict[str, Any], workspace_keys: List[str], config_path: str = "") -> tuple:
+def install_only(config: Dict[str, Any], workspace_keys: List[str], config_path: str = "", include_explicit: bool = False, force: bool = False) -> tuple:
     """Install unit files only, without starting or enabling them.
 
-    Returns (all_unit_names, enabled_unit_names).
+    Every unit file is always written. A service is added to the start/enable
+    sets only when `include_explicit` is set or the service is not explicit_start.
+
+    Returns (all_unit_names, enabled_unit_names, start_only_names).
     """
     systemd_cfg = config["systemd"]
     runtime_cfg = config["runtime"]
     unit_names: List[str] = []
     enabled_unit_names: List[str] = []
+    start_only_names: List[str] = []
+    deferred_start: List[str] = []
 
     unit_dir = Path(systemd_cfg.get("unit_dir", "/etc/systemd/system"))
     wanted_by = systemd_cfg.get("wanted_by", "multi-user.target")
@@ -143,6 +148,7 @@ def install_only(config: Dict[str, Any], workspace_keys: List[str], config_path:
             service_options = svc.get("service_options", [])
             use_root = bool(svc.get("use_root", False))
             enable = bool(svc.get("enable", True))
+            explicit_start = bool(svc.get("explicit_start", False))
 
             if not isinstance(depends_on, list):
                 err(f"Service {unit_name} has invalid depends_on: expected a list.")
@@ -175,7 +181,7 @@ def install_only(config: Dict[str, Any], workspace_keys: List[str], config_path:
 
             unit_file = unit_dir / unit_name
 
-            if not check_and_prompt_for_modifications(unit_file, unit_name):
+            if not check_and_prompt_for_modifications(unit_file, unit_name, force=force):
                 err(f"Operation cancelled during processing of {unit_name}.")
                 sys.exit(1)
 
@@ -185,33 +191,49 @@ def install_only(config: Dict[str, Any], workspace_keys: List[str], config_path:
             record_update(unit_name, unit_content, config_path)
 
             unit_names.append(unit_name)
-            if enable:
-                enabled_unit_names.append(unit_name)
-            log(f"Written: {unit_file} (enable={enable})")
+            if include_explicit or not explicit_start:
+                if enable:
+                    enabled_unit_names.append(unit_name)
+                else:
+                    start_only_names.append(unit_name)
+                log(f"Written: {unit_file} (enable={enable})")
+            else:
+                deferred_start.append(unit_name)
+                log(f"Written: {unit_file} (explicit_start: not started)")
 
     run_cmd(["systemctl", "daemon-reload"])
     log("systemd daemon-reload completed.")
     log("Install finished (not started, not enabled).")
-    return unit_names, enabled_unit_names
+    if deferred_start:
+        log(
+            "explicit_start services installed but not started "
+            f"(use -a/--all to start them): {', '.join(deferred_start)}"
+        )
+    return unit_names, enabled_unit_names, start_only_names
 
 
-def install_start_enable(config: Dict[str, Any], workspace_keys: List[str], config_path: str = "") -> None:
-    """Install services, then start and enable them (respecting per-service enable flag)."""
-    unit_names, enabled_unit_names = install_only(config, workspace_keys, config_path)
-
-    not_enabled = [u for u in unit_names if u not in enabled_unit_names]
+def install_start_enable(config: Dict[str, Any], workspace_keys: List[str], config_path: str = "", include_explicit: bool = False, force: bool = False) -> None:
+    """Install services, then start and enable them (respecting explicit_start + enable)."""
+    unit_names, enabled_unit_names, start_only_names = install_only(
+        config, workspace_keys, config_path,
+        include_explicit=include_explicit, force=force,
+    )
 
     if enabled_unit_names:
         log("Enabling and starting services...")
         run_cmd(["systemctl", "enable", "--now", *enabled_unit_names])
 
-    if not_enabled:
-        log(f"Starting without enable: {', '.join(not_enabled)}")
-        run_cmd(["systemctl", "start", *not_enabled])
+    if start_only_names:
+        log(f"Starting without enable: {', '.join(start_only_names)}")
+        run_cmd(["systemctl", "start", *start_only_names])
 
+    started = set(enabled_unit_names) | set(start_only_names)
+    not_started = [u for u in unit_names if u not in started]
     log("Completed: services are started.")
-    if not_enabled:
-        log(f"Note: {', '.join(not_enabled)} will NOT auto-start on boot (enable=false).")
+    if start_only_names:
+        log(f"Note: {', '.join(start_only_names)} will NOT auto-start on boot (enable=false).")
+    if not_started:
+        log(f"Note: {', '.join(not_started)} NOT started (explicit_start).")
     log(f"Check status with: systemctl status {' '.join(unit_names)}")
 
 
@@ -223,6 +245,37 @@ def get_workspace_unit_names(config: Dict[str, Any], workspace_keys: List[str]) 
         services = workspace_cfg.get("services", [])
         unit_names.extend(svc["unit_name"] for svc in services)
     return unit_names
+
+
+def _service_flags(config: Dict[str, Any], workspace_keys: List[str]):
+    """Yield (unit_name, explicit_start, explicit_stop) for each selected service."""
+    for ws_key in workspace_keys:
+        services = config.get("workspaces", {}).get(ws_key, {}).get("services", [])
+        for svc in services:
+            yield (
+                svc["unit_name"],
+                bool(svc.get("explicit_start", False)),
+                bool(svc.get("explicit_stop", False)),
+            )
+
+
+def _explicit_stop_units(config: Dict[str, Any], workspace_keys: List[str]) -> set:
+    """Set of currently-defined unit names marked explicit_stop."""
+    return {name for name, _start, stop in _service_flags(config, workspace_keys) if stop}
+
+
+def _select_for_stop(config: Dict[str, Any], workspace_keys: List[str], include_explicit: bool):
+    """Partition selected services into (all, to_remove, skipped) by explicit_stop."""
+    all_names: List[str] = []
+    to_remove: List[str] = []
+    skipped: List[str] = []
+    for name, _start, stop in _service_flags(config, workspace_keys):
+        all_names.append(name)
+        if (not stop) or include_explicit:
+            to_remove.append(name)
+        else:
+            skipped.append(name)
+    return all_names, to_remove, skipped
 
 
 def parse_units_from_makefile(makefile_path: Path) -> List[str]:
@@ -239,7 +292,7 @@ def parse_units_from_makefile(makefile_path: Path) -> List[str]:
     return []
 
 
-def remove_units(unit_dir: Path, unit_names: List[str]) -> None:
+def remove_units(unit_dir: Path, unit_names: List[str], force: bool = False) -> None:
     """Disable/stop and remove specified unit files if they exist."""
     if not unit_names:
         return
@@ -250,7 +303,7 @@ def remove_units(unit_dir: Path, unit_names: List[str]) -> None:
     for unit_name in unit_names:
         unit_file = unit_dir / unit_name
 
-        if not check_and_prompt_for_modifications(unit_file, unit_name):
+        if not check_and_prompt_for_modifications(unit_file, unit_name, force=force):
             err(f"Operation cancelled during processing of {unit_name}.")
             sys.exit(1)
 
@@ -264,12 +317,14 @@ def remove_units(unit_dir: Path, unit_names: List[str]) -> None:
     subprocess.run(["systemctl", "reset-failed"], check=False)
 
 
-def sync_update(config: Dict[str, Any], workspace_keys: List[str], config_path: str = "") -> None:
+def sync_update(config: Dict[str, Any], workspace_keys: List[str], config_path: str = "", include_explicit: bool = False, force: bool = False) -> None:
     """Stop old units, remove stale units, then install/start/enable current units.
 
     Stale cleanup is scoped to units previously installed by THIS config (matched
     via the .origin sidecar), so updating one ros2_services.yaml never removes
-    units that belong to another directory's config.
+    units that belong to another directory's config. explicit_stop services
+    currently defined are left running during the stop-previous step unless
+    `include_explicit` is set.
     """
     systemd_cfg = config["systemd"]
     unit_dir = Path(systemd_cfg.get("unit_dir", "/etc/systemd/system"))
@@ -278,38 +333,62 @@ def sync_update(config: Dict[str, Any], workspace_keys: List[str], config_path: 
 
     previous_units = tracked_units_for_config(config_path)
 
-    if previous_units:
-        log(f"Stopping previous units before update: {' '.join(previous_units)}")
-        subprocess.run(["systemctl", "stop", *previous_units], check=False)
+    # Don't stop explicit_stop services that are still defined, unless include_explicit.
+    guarded = _explicit_stop_units(config, workspace_keys)
+    stop_previous = (
+        previous_units
+        if include_explicit
+        else [u for u in previous_units if u not in guarded]
+    )
+
+    if stop_previous:
+        log(f"Stopping previous units before update: {' '.join(stop_previous)}")
+        subprocess.run(["systemctl", "stop", *stop_previous], check=False)
 
     stale_units = sorted(set(previous_units) - set(current_units))
     if stale_units:
-        remove_units(unit_dir, stale_units)
+        remove_units(unit_dir, stale_units, force=force)
     else:
         log("No stale units detected for this config.")
 
-    install_start_enable(config, workspace_keys, config_path)
+    install_start_enable(
+        config, workspace_keys, config_path,
+        include_explicit=include_explicit, force=force,
+    )
 
 
-def uninstall(config: Dict[str, Any], workspace_keys: List[str]) -> None:
-    """Uninstall services for workspace."""
+def uninstall(config: Dict[str, Any], workspace_keys: List[str], include_explicit: bool = False, force: bool = False) -> None:
+    """Uninstall services for the selected workspaces.
+
+    Services marked explicit_stop are left running/installed unless `include_explicit`.
+    """
     systemd_cfg = config["systemd"]
     unit_dir = Path(systemd_cfg.get("unit_dir", "/etc/systemd/system"))
-    
-    unit_names = get_workspace_unit_names(config, workspace_keys)
 
-    if not unit_names:
+    all_names, to_remove, skipped = _select_for_stop(
+        config, workspace_keys, include_explicit
+    )
+
+    if not all_names:
         log("No services to uninstall.")
         return
+    if not to_remove:
+        log(
+            "Nothing to uninstall (all services are explicit_stop; use -a/--all): "
+            f"{', '.join(all_names)}"
+        )
+        return
+    if skipped:
+        log(f"Keeping explicit_stop services (use -a/--all to remove): {', '.join(skipped)}")
 
     log("Stopping and disabling services (if present)...")
-    subprocess.run(["systemctl", "disable", "--now", *unit_names], check=False)
+    subprocess.run(["systemctl", "disable", "--now", *to_remove], check=False)
 
     log("Removing unit files...")
-    for unit_name in unit_names:
+    for unit_name in to_remove:
         unit_file = unit_dir / unit_name
 
-        if not check_and_prompt_for_modifications(unit_file, unit_name):
+        if not check_and_prompt_for_modifications(unit_file, unit_name, force=force):
             err(f"Operation cancelled during processing of {unit_name}.")
             sys.exit(1)
 
@@ -324,11 +403,13 @@ def uninstall(config: Dict[str, Any], workspace_keys: List[str]) -> None:
     log("Uninstall completed.")
 
 
-def uninstall_all(unit_dir: Path) -> None:
-    """Uninstall every tracked unit across ALL configs (used by --all).
+def uninstall_all(unit_dir: Path, force: bool = False) -> None:
+    """Uninstall every tracked unit across ALL configs (used by --global).
 
     Operates purely on tracked unit names, so it does not need to load any
-    ros2_services.yaml. ``unit_dir`` is the systemd unit directory to clear.
+    ros2_services.yaml. NOTE: this blunt path ignores explicit_stop (it clears
+    everything tracked); the per-config uninstall() respects explicit_stop.
+    ``unit_dir`` is the systemd unit directory to clear.
     """
     unit_names = all_tracked_units()
     if not unit_names:
@@ -336,5 +417,5 @@ def uninstall_all(unit_dir: Path) -> None:
         return
 
     log(f"Uninstalling ALL tracked units across configs: {' '.join(unit_names)}")
-    remove_units(unit_dir, unit_names)
-    log("Uninstall-all completed.")
+    remove_units(unit_dir, unit_names, force=force)
+    log("Uninstall-global completed.")
