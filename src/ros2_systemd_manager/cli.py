@@ -65,6 +65,9 @@ def get_help_text() -> str:
         "  uninstall           Stop, disable, and securely remove unit files\n"
         "  makefile            Regenerate the local Makefile helper only\n"
         "  list                Print this config's unit names (add --global for every tracked config)\n"
+        "  add [target]        Interactively discover ROS 2 packages/launch/executables and add them\n"
+        "                      as services (needs the [add] extra). Optional target = path or package.\n"
+        "                      -a adds all packages; -u runs update afterwards to apply the config.\n"
         "  upgrade             Self-upgrade this CLI tool remotely via pip\n"
         "  set [options]       Write ROS DDS env into shell profile/rc files (only keys you pass):\n"
         "                      ROS_DOMAIN_ID / RMW_IMPLEMENTATION / ROS_LOCALHOST_ONLY\n"
@@ -123,6 +126,12 @@ def parse_args() -> argparse.Namespace:
         help="Action to perform (default: actions.default_action in YAML)",
     )
     parser.add_argument(
+        "target",
+        nargs="?",
+        default=None,
+        help="For 'add': a package path (relative/absolute) or package name to add.",
+    )
+    parser.add_argument(
         "-d", "--domain-id",
         nargs="?", const=_BARE, type=int, default=None,
         help="ROS_DOMAIN_ID for 'set' (default 0). Bare -d applies the default after confirmation.",
@@ -170,6 +179,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="With 'set': list the rc/profile files that would be changed (and the lines "
              "that would be written) without modifying anything. Does not require root.",
+    )
+    parser.add_argument(
+        "-u", "--update",
+        action="store_true",
+        help="With 'add': after writing the config, run the 'update' action to apply it "
+             "(this step requires root).",
     )
     return parser.parse_args()
 
@@ -348,6 +363,14 @@ def run() -> None:
 
     if action_arg == "list":
         _run_list(args)
+        return
+
+    if action_arg == "add":
+        config_path = Path(args.config) if args.config else Path(_default_config_path())
+        config = load_yaml_config(config_path)
+        validate_config(config)
+        from .add_wizard import run_add
+        run_add(args, config, config_path)
         return
 
     # install / apply / update / uninstall / makefile require a config (unless --global)

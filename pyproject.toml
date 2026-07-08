@@ -9,6 +9,10 @@ description = "YAML-driven ROS2 systemd service manager"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = ["PyYAML>=6.0"]
+
+[project.optional-dependencies]
+# `add` (interactive service wizard) extras — install with: pip install ros2-systemd-manager[add]
+add = ["questionary>=2.0", "ruamel.yaml>=0.18"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",

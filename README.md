@@ -36,6 +36,7 @@ If you've ever lost a robot stack to a reboot, juggled a dozen terminal tabs, or
   - [CLI](#cli)
     - [Action reference](#action-reference)
     - [Scoping: current directory vs. `--global`](#scoping-current-directory-vs---global)
+  - [Adding services interactively (`add`)](#adding-services-interactively-add)
   - [ROS DDS Environment (`set`)](#ros-dds-environment-set)
     - [When to use it](#when-to-use-it)
     - [What gets written](#what-gets-written)
@@ -103,16 +104,18 @@ ros2-systemd-manager [-v] [-c CONFIG] [-w WORKSPACE_KEY] [-f] [-a] [-g] [-n] [-d
 | `-c`, `--config PATH` | Path to the YAML config (default: `./ros2_services.yaml`, then the packaged default). |
 | `-w`, `--workspace-key KEY` | Operate on a single workspace key (default: all workspaces in the config). |
 | `-f`, `--force` | **Skip all confirmation prompts** (assume yes): the manual-modification archive prompt, the `set` defaults-confirmation, and `init` overwrite. |
-| `-a`, `--all` | Include services marked `explicit_start`/`explicit_stop` in the operation (override the per-service guards). Applies to `install`/`apply`/`update`/`uninstall`. |
+| `-a`, `--all` | Include services marked `explicit_start`/`explicit_stop` in the operation (override the per-service guards). Applies to `install`/`apply`/`update`/`uninstall`. **For `add`: add every package in the workspace** (skip the package picker). |
 | `-g`, `--global` | Operate across **all** tracked configs (every directory ever installed), not just the current one. Applies to `install`/`apply`/`update`/`uninstall`/`list`. |
 | `-n`, `--dry-run` | With `set`: list the rc/profile files that would change (and the exact lines that would be written) **without modifying anything**. Does not require root. |
+| `-u`, `--update` | With `add`: after writing the config, run `update` to apply it (that step requires root). |
+| `target` (positional) | With `add`: a package path (relative/absolute) or package name to add; omitted → interactive discovery. |
 | `-d`, `--domain-id [N]` | `ROS_DOMAIN_ID` for `set` (default `0`). Bare `-d` applies the default after confirmation. |
 | `-r`, `--rmw [NAME]` | RMW for `set`: `cyclonedds` \| `fastrtps` (default `cyclonedds`). Bare `-r` applies the default after confirmation. |
 | `-l`, `--localhost-only [0\|1]` | `ROS_LOCALHOST_ONLY` for `set` (default `1`). Bare `-l` applies the default after confirmation. |
 
 These three flags are **orthogonal and compose freely**, e.g. `apply -g -a -f` = every config, every service (including explicit ones), no prompts.
 
-**Actions:** `init` · `install` · `apply` · `uninstall` · `update` · `makefile` · `list` · `set` · `upgrade`
+**Actions:** `init` · `install` · `apply` · `uninstall` · `update` · `makefile` · `list` · `add` · `set` · `upgrade`
 
 ### Action reference
 
@@ -123,6 +126,7 @@ These three flags are **orthogonal and compose freely**, e.g. `apply -g -a -f` =
 - **`uninstall`** — Stop, disable, remove unit files, `daemon-reload`, `reset-failed`. `explicit_stop` services are left running unless `-a`. **Requires root.** Current config only; `-g` repeats across every tracked config.
 - **`makefile`** — Regenerate the Makefile helper only; no systemd changes.
 - **`list`** — Print this config's unit names (one per line). `list --global` prints every tracked unit across all configs. Handy on its own and used by the Makefile `-global` targets.
+- **`add`** — Interactively discover ROS 2 packages, launch files, executables, arguments, and config files, then write them as services (`ros2_services.yaml`). Optional `target` (path or package name); `-a` adds all packages; `-u` runs `update` afterwards. No root needed unless `-u`. See [Adding services interactively](#adding-services-interactively-add). Needs the `[add]` extra: `pip install 'ros2-systemd-manager[add]'`.
 - **`set`** — Write selected ROS DDS env vars into shell rc/profile files (only the keys you pass). See [ROS DDS Environment](#ros-dds-environment-set). **Requires root.**
 - **`upgrade`** — Self-upgrade via `pip install --upgrade` (adds `--user` automatically when not in a venv and not root).
 
@@ -141,6 +145,39 @@ ros2-systemd-manager list --global         # see everything the tool manages
 ```
 
 > **Migration:** units tracked before this feature have no recorded origin. They're left untouched by default `update`/`uninstall` (safe) and still swept by `--global`. Origins attach the next time you `apply`/`update` each config.
+
+## Adding services interactively (`add`)
+
+Instead of hand-writing service entries, run the wizard — it introspects your built ROS 2 workspace via `ros2` and writes the entries for you (comments preserved). Needs the `[add]` extra:
+
+```bash
+pip install 'ros2-systemd-manager[add]'
+ros2-systemd-manager add            # pick packages interactively
+ros2-systemd-manager add my_pkg     # add one package (path or name)
+ros2-systemd-manager add -a         # add every package in the workspace
+ros2-systemd-manager add -a -u      # ...then run update to deploy them
+```
+
+The flow:
+
+1. **Choose packages** — with no `target`, multi-select from the workspace-local packages (`ros2 pkg list`, filtered to packages built under the workspace). A `target` (path or package name) adds just that one; `-a` adds all. A path/package that doesn't belong to a configured workspace aborts.
+2. **Choose how to run each package** — single-select one of its launch files (`share/<pkg>/launch/*`) or `ros2 run` executables (`ros2 pkg executables`).
+3. **Parameters**:
+   - **Launch file** — `ros2 launch <pkg> <file> --show-args` is parsed for declared arguments; you're prompted for each (default pre-filled, required enforced) and they become `arg:=value` tokens.
+   - **Executable** — enter `key:=value` params manually (ROS 2 doesn't expose exec params statically). If the package ships a `config/` directory, you can pick a file to append as `--params-file`.
+4. **Name & describe** — confirm/edit the generated `unit_name` (`ros2-<pkg>.service` for launch, `ros2-<pkg>-<exec>.service` for executables) and `description`.
+5. **Conflicts** — if a `unit_name` already exists you choose per service: **Overwrite this / Always overwrite / Skip this / Always skip**.
+6. **Preview & write** — confirm, then the entries are appended/replaced in `ros2_services.yaml` (round-trip YAML, comments preserved). With `-u`, `update` runs immediately to deploy (requires root).
+
+Example generated entry:
+
+```yaml
+- unit_name: ros2-foxglove-bridge.service
+  description: foxglove_bridge
+  launch_command: ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8765
+```
+
+> **Note:** ROS introspection shells out to `ros2` after sourcing the workspace's `setup_script`, so the workspace must be built (`colcon build`) first. The `[add]` extra adds `questionary` (TUI) and `ruamel.yaml` (comment-preserving edits).
 
 ## ROS DDS Environment (`set`)
 

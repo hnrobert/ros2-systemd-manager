@@ -4,6 +4,8 @@
 # 1) actions.default_action defines the action used when no CLI action is provided
 # 2) workspaces can define multiple ROS2 workspaces, each with its own services
 # 3) each service is converted into a dedicated systemd unit file
+#    TIP: instead of writing services by hand, run `ros2-systemd-manager add` (needs the [add] extra)
+#    to discover packages, launch files, executables, args, and config files interactively.
 # 4) services can optionally declare depends_on (list) for unit dependencies
 #    Example: if A depends_on B, unit A will include Requires=B and After=B
 # 5) services can optionally declare service_options (list of raw systemd [Service] lines)
